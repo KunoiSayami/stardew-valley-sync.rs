@@ -21,17 +21,34 @@ class _ServerConnectScreenState extends State<ServerConnectScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSaved();
-    _scan();
+    _loadSaved(); // handles scanning internally when saved credentials exist
   }
 
   Future<void> _loadSaved() async {
     final prefs = await SharedPreferences.getInstance();
+    final ip = prefs.getString('server_ip') ?? '';
+    final port = prefs.getString('server_port') ?? '24742';
+    final pin = prefs.getString('server_pin') ?? '';
     setState(() {
-      _ipController.text = prefs.getString('server_ip') ?? '';
-      _portController.text = prefs.getString('server_port') ?? '24742';
-      _pinController.text = prefs.getString('server_pin') ?? '';
+      _ipController.text = ip;
+      _portController.text = port;
+      _pinController.text = pin;
     });
+    if (ip.isNotEmpty && pin.isNotEmpty) {
+      // Saved credentials exist: scan first, but auto-connect if nothing found.
+      setState(() => _scanning = true);
+      final servers = await discoverServers();
+      if (!mounted) return;
+      setState(() => _scanning = false);
+      if (servers.isEmpty) {
+        _connect(ip, port, pin);
+      } else {
+        setState(() => _discovered = servers);
+      }
+    } else {
+      // No saved credentials: just scan normally.
+      _scan();
+    }
   }
 
   Future<void> _scan() async {
