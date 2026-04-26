@@ -1,13 +1,13 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
-    routing::{delete, get, post},
     Router,
+    routing::{delete, get, post},
 };
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auth;
 mod config;
@@ -18,9 +18,9 @@ mod saves;
 use auth::PinAuthLayer;
 use config::Config;
 use routes::{
-    delete::handler as delete_handler, download::handler as download_handler,
+    AppState, delete::handler as delete_handler, download::handler as download_handler,
     health::handler as health_handler, saves_list::handler as saves_list_handler,
-    upload::handler_with_conflict_check as upload_handler, AppState,
+    upload::handler_with_conflict_check as upload_handler,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,7 +34,14 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let cfg = Config::load()?;
+    let (cfg, config_path) = Config::load()?;
+    match &config_path {
+        Some(p) => info!("Config file: {}", p.display()),
+        None => info!(
+            "No config file found (default: {})",
+            config::default_config_path().display()
+        ),
+    }
     let saves_dir = cfg.saves_dir_resolved();
 
     if !saves_dir.exists() {

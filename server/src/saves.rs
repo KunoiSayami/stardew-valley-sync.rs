@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use common::SaveSlotInfo;
 use regex::Regex;
 use tempfile::TempDir;

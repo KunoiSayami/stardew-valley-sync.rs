@@ -51,18 +51,21 @@ pub struct Config {
 
 impl Config {
     /// Parse CLI args and optional config file, with CLI taking precedence.
-    pub fn load() -> anyhow::Result<Self> {
+    pub fn load() -> anyhow::Result<(Self, Option<PathBuf>)> {
         let cli = Cli::parse();
 
-        let file = match &cli.config {
-            Some(path) => FileConfig::load(path)?,
+        let (file, config_path) = match &cli.config {
+            Some(path) => (FileConfig::load(path)?, Some(path.clone())),
             None => {
-                // Try the default location silently; missing file is fine.
-                let default = default_config_path();
-                if default.exists() {
-                    FileConfig::load(&default).unwrap_or_default()
-                } else {
-                    FileConfig::default()
+                // 1. config.toml next to the binary / in the working directory
+                // 2. platform config dir (~/.config/stardew-sync-server/config.toml)
+                let candidates = [PathBuf::from("config.toml"), default_config_path()];
+                match candidates.iter().find(|p| p.exists()) {
+                    Some(path) => (
+                        FileConfig::load(path).unwrap_or_default(),
+                        Some(path.clone()),
+                    ),
+                    None => (FileConfig::default(), None),
                 }
             }
         };
@@ -71,11 +74,14 @@ impl Config {
             anyhow::anyhow!("PIN is required: pass --pin or set `pin` in the config file")
         })?;
 
-        Ok(Self {
-            pin,
-            port: cli.port.or(file.port).unwrap_or(24742),
-            saves_dir: cli.saves_dir.or(file.saves_dir),
-        })
+        Ok((
+            Self {
+                pin,
+                port: cli.port.or(file.port).unwrap_or(24742),
+                saves_dir: cli.saves_dir.or(file.saves_dir),
+            },
+            config_path,
+        ))
     }
 
     pub fn saves_dir_resolved(&self) -> PathBuf {
@@ -99,7 +105,7 @@ pub fn detect_saves_dir() -> PathBuf {
         .join("Saves")
 }
 
-fn default_config_path() -> PathBuf {
+pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("stardew-sync-server")
