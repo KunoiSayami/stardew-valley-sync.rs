@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/save_slot.dart';
+import 'server_connect_screen.dart';
 import '../services/api_client.dart';
 import '../services/saf_service.dart';
 import '../widgets/conflict_dialog.dart';
@@ -68,6 +69,17 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   Future<void> _checkPermission() async {
     final granted = await _saf.hasPermission();
     if (mounted) setState(() => _hasPermission = granted);
+  }
+
+  Future<void> _disconnect() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('server_ip');
+    await prefs.remove('server_port');
+    await prefs.remove('server_pin');
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const ServerConnectScreen()),
+    );
   }
 
   Future<void> _requestPermission() async {
@@ -233,6 +245,11 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refresh,
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Disconnect',
+            onPressed: _disconnect,
           ),
         ],
       ),
