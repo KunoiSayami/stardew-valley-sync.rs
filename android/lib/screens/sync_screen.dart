@@ -1,8 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../models/save_slot.dart';
 import '../services/api_client.dart';
 import '../services/saf_service.dart';
@@ -24,11 +22,11 @@ class SyncScreen extends StatefulWidget {
   State<SyncScreen> createState() => _SyncScreenState();
 }
 
-class _SyncScreenState extends State<SyncScreen> {
+class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   late final ApiClient _api;
   final _saf = SafService();
-  String? _treeUri;
 
+  bool _hasPermission = false;
   List<SaveSlot> _serverSlots = [];
   bool _loading = false;
   String? _statusMessage;
@@ -36,24 +34,37 @@ class _SyncScreenState extends State<SyncScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _api = ApiClient(
       baseUrl: 'http://${widget.ip}:${widget.port}',
       pin: widget.pin,
     );
-    _initSaf();
+    _checkPermission();
     _refresh();
   }
 
-  Future<void> _initSaf() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? uri = prefs.getString('saf_tree_uri');
-    if (uri == null) {
-      uri = await _saf.openDirectoryPicker();
-      if (uri != null) {
-        await prefs.setString('saf_tree_uri', uri);
-      }
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-check permission when the user returns from the Settings page.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermission();
     }
-    setState(() => _treeUri = uri);
+  }
+
+  Future<void> _checkPermission() async {
+    final granted = await _saf.hasPermission();
+    if (mounted) setState(() => _hasPermission = granted);
+  }
+
+  Future<void> _requestPermission() async {
+    final granted = await _saf.checkAndRequestPermission();
+    if (mounted) setState(() => _hasPermission = granted);
   }
 
   Future<void> _refresh() async {
@@ -73,14 +84,12 @@ class _SyncScreenState extends State<SyncScreen> {
 
   /// Pull: download from server → write to Android.
   Future<void> _pull(SaveSlot serverSlot) async {
-    final uri = _treeUri;
-    if (uri == null) {
-      _showStatus('No save folder selected. Tap the folder icon.');
+    if (!_hasPermission) {
+      _showStatus('Storage permission required. Tap the key icon.');
       return;
     }
 
-    // Check local timestamp for conflict
-    final localMs = await _saf.getSlotModifiedMs(uri, serverSlot.slotId);
+    final localMs = await _saf.getSlotModifiedMs(serverSlot.slotId);
     if (localMs > serverSlot.lastModifiedMs) {
       if (!mounted) return;
       final overwrite = await showConflictDialog(
@@ -98,7 +107,7 @@ class _SyncScreenState extends State<SyncScreen> {
     try {
       final (:zipBytes, :serverLastModifiedMs) =
           await _api.downloadSave(serverSlot.slotId);
-      await _saf.writeSave(uri, serverSlot.slotId, zipBytes);
+      await _saf.writeSave(serverSlot.slotId, zipBytes);
       _showStatus('Downloaded ${serverSlot.slotId}');
     } catch (e) {
       _showStatus('Download failed: $e');
@@ -107,15 +116,13 @@ class _SyncScreenState extends State<SyncScreen> {
 
   /// Push: read from Android → upload to server.
   Future<void> _push(SaveSlot serverSlot) async {
-    final uri = _treeUri;
-    if (uri == null) {
-      _showStatus('No save folder selected.');
+    if (!_hasPermission) {
+      _showStatus('Storage permission required. Tap the key icon.');
       return;
     }
 
-    final localMs = await _saf.getSlotModifiedMs(uri, serverSlot.slotId);
+    final localMs = await _saf.getSlotModifiedMs(serverSlot.slotId);
 
-    // Check if server is newer
     if (serverSlot.lastModifiedMs > localMs) {
       if (!mounted) return;
       final overwrite = await showConflictDialog(
@@ -131,7 +138,7 @@ class _SyncScreenState extends State<SyncScreen> {
 
     _showStatus('Uploading ${serverSlot.slotId}…');
     try {
-      final zipBytes = await _saf.readSave(uri, serverSlot.slotId);
+      final zipBytes = await _saf.readSave(serverSlot.slotId);
       await _api.uploadSave(
         serverSlot.slotId,
         zipBytes,
@@ -151,9 +158,8 @@ class _SyncScreenState extends State<SyncScreen> {
         sourceLabel: 'Android',
       );
       if (overwrite) {
-        final zipBytes = await _saf.readSave(uri, serverSlot.slotId);
-        await _api.uploadSave(serverSlot.slotId, zipBytes, localMs,
-            force: true);
+        final zipBytes = await _saf.readSave(serverSlot.slotId);
+        await _api.uploadSave(serverSlot.slotId, zipBytes, localMs, force: true);
         _showStatus('Uploaded ${serverSlot.slotId} (forced)');
         await _refresh();
       }
@@ -176,16 +182,14 @@ class _SyncScreenState extends State<SyncScreen> {
         title: Text('${widget.ip}:${widget.port}'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.folder_open),
-            tooltip: 'Change saves folder',
-            onPressed: () async {
-              final uri = await _saf.openDirectoryPicker();
-              if (uri != null) {
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setString('saf_tree_uri', uri);
-                setState(() => _treeUri = uri);
-              }
-            },
+            icon: Icon(
+              _hasPermission ? Icons.lock_open : Icons.lock,
+              color: _hasPermission ? null : Colors.orange,
+            ),
+            tooltip: _hasPermission
+                ? 'Storage access granted'
+                : 'Grant "All files access" permission',
+            onPressed: _hasPermission ? null : _requestPermission,
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -195,13 +199,15 @@ class _SyncScreenState extends State<SyncScreen> {
       ),
       body: Column(
         children: [
-          if (_treeUri == null)
+          if (!_hasPermission)
             MaterialBanner(
               content: const Text(
-                  'No save folder selected. Tap the folder icon to choose your Stardew Valley saves directory.'),
+                  'Storage permission required to access Stardew Valley saves. '
+                  'Tap the lock icon to grant "All files access".'),
               actions: [
                 TextButton(
-                    onPressed: _initSaf, child: const Text('Choose folder'))
+                    onPressed: _requestPermission,
+                    child: const Text('Grant access')),
               ],
             ),
           if (_loading) const LinearProgressIndicator(),

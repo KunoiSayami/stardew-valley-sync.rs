@@ -1,6 +1,5 @@
 # Rust
 target/
-Cargo.lock
 config.toml
 
 # Flutter / Android Studio
