@@ -31,11 +31,14 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         private const val REQUEST_MANAGE_STORAGE = 42002
         private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
 
-        private fun savesDir(): File =
+        fun defaultSavesPath(): String =
             File(
                 Environment.getExternalStorageDirectory(),
                 "Android/data/$STARDEW_PACKAGE/files/Saves"
-            )
+            ).absolutePath
+
+        private fun savesDir(customPath: String?): File =
+            if (!customPath.isNullOrBlank()) File(customPath) else File(defaultSavesPath())
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -65,7 +68,8 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         when (call.method) {
             "checkAndRequestPermission" -> checkAndRequestPermission(result)
             "hasPermission"             -> result.success(hasManageStoragePermission())
-            "listSaves"                 -> listSaves(result)
+            "getDefaultSavesPath"       -> result.success(defaultSavesPath())
+            "listSaves"                 -> listSaves(call, result)
             "readSave"                  -> readSave(call, result)
             "writeSave"                 -> writeSave(call, result)
             "getSlotModifiedMs"         -> getSlotModifiedMs(call, result)
@@ -98,8 +102,8 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         return true
     }
 
-    private fun listSaves(result: MethodChannel.Result) {
-        val dir = savesDir()
+    private fun listSaves(call: MethodCall, result: MethodChannel.Result) {
+        val dir = savesDir(call.argument<String>("savesPath"))
         if (!dir.exists()) return result.success(emptyList<Any>())
 
         val slots = dir.listFiles()
@@ -117,7 +121,7 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun readSave(call: MethodCall, result: MethodChannel.Result) {
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
 
-        val slotDir = File(savesDir(), slotId)
+        val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
         val mainFile = File(slotDir, slotId).takeIf { it.exists() }
             ?: return result.error("NOT_FOUND", "Main save file not found in $slotId", null)
         val infoFile = File(slotDir, "SaveGameInfo").takeIf { it.exists() }
@@ -140,7 +144,7 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
         val data = call.argument<ByteArray>("data") ?: return result.error("NO_DATA", "data required", null)
 
-        val savesRoot = savesDir()
+        val savesRoot = savesDir(call.argument<String>("savesPath"))
         savesRoot.mkdirs()
 
         val existing = File(savesRoot, slotId)
@@ -167,7 +171,7 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun getSlotModifiedMs(call: MethodCall, result: MethodChannel.Result) {
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
 
-        val slotDir = File(savesDir(), slotId)
+        val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
         val mainFile = File(slotDir, slotId)
         val infoFile = File(slotDir, "SaveGameInfo")
 

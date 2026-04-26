@@ -1,10 +1,14 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/save_slot.dart';
 import '../services/api_client.dart';
 import '../services/saf_service.dart';
 import '../widgets/conflict_dialog.dart';
+
+const _kSavesPathKey = 'saves_path';
 
 class SyncScreen extends StatefulWidget {
   final String ip;
@@ -27,9 +31,9 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   final _saf = SafService();
 
   bool _hasPermission = false;
+  String? _savesPath; // null = use default
   List<SaveSlot> _serverSlots = [];
   bool _loading = false;
-  String? _statusMessage;
 
   @override
   void initState() {
@@ -39,7 +43,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
       baseUrl: 'http://${widget.ip}:${widget.port}',
       pin: widget.pin,
     );
-    _checkPermission();
+    _init();
     _refresh();
   }
 
@@ -49,12 +53,16 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // Re-check permission when the user returns from the Settings page.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkPermission();
-    }
+    if (state == AppLifecycleState.resumed) _checkPermission();
+  }
+
+  Future<void> _init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_kSavesPathKey);
+    if (mounted) setState(() => _savesPath = saved);
+    await _checkPermission();
   }
 
   Future<void> _checkPermission() async {
@@ -67,29 +75,51 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     if (mounted) setState(() => _hasPermission = granted);
   }
 
+  Future<void> _editSavesPath() async {
+    final defaultPath = await _saf.getDefaultSavesPath();
+    if (!mounted) return;
+
+    final controller = TextEditingController(text: _savesPath ?? '');
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => _SavesPathDialog(
+        controller: controller,
+        defaultPath: defaultPath,
+      ),
+    );
+
+    // result == null → cancelled; result == '' → reset to default
+    if (result == null) return;
+    final newPath = result.trim().isEmpty ? null : result.trim();
+    final prefs = await SharedPreferences.getInstance();
+    if (newPath == null) {
+      await prefs.remove(_kSavesPathKey);
+    } else {
+      await prefs.setString(_kSavesPathKey, newPath);
+    }
+    if (mounted) setState(() => _savesPath = newPath);
+  }
+
   Future<void> _refresh() async {
-    setState(() {
-      _loading = true;
-      _statusMessage = null;
-    });
+    setState(() => _loading = true);
     try {
       final slots = await _api.listSaves();
       setState(() => _serverSlots = slots);
     } catch (e) {
-      setState(() => _statusMessage = 'Failed to load saves: $e');
+      _showStatus('Failed to load saves: $e');
     } finally {
-      setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
   }
 
-  /// Pull: download from server → write to Android.
   Future<void> _pull(SaveSlot serverSlot) async {
     if (!_hasPermission) {
-      _showStatus('Storage permission required. Tap the key icon.');
+      _showStatus('Storage permission required. Tap the lock icon.');
       return;
     }
 
-    final localMs = await _saf.getSlotModifiedMs(serverSlot.slotId);
+    final localMs =
+        await _saf.getSlotModifiedMs(serverSlot.slotId, savesPath: _savesPath);
     if (localMs > serverSlot.lastModifiedMs) {
       if (!mounted) return;
       final overwrite = await showConflictDialog(
@@ -107,21 +137,21 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     try {
       final (:zipBytes, :serverLastModifiedMs) =
           await _api.downloadSave(serverSlot.slotId);
-      await _saf.writeSave(serverSlot.slotId, zipBytes);
+      await _saf.writeSave(serverSlot.slotId, zipBytes, savesPath: _savesPath);
       _showStatus('Downloaded ${serverSlot.slotId}');
     } catch (e) {
       _showStatus('Download failed: $e');
     }
   }
 
-  /// Push: read from Android → upload to server.
   Future<void> _push(SaveSlot serverSlot) async {
     if (!_hasPermission) {
-      _showStatus('Storage permission required. Tap the key icon.');
+      _showStatus('Storage permission required. Tap the lock icon.');
       return;
     }
 
-    final localMs = await _saf.getSlotModifiedMs(serverSlot.slotId);
+    final localMs =
+        await _saf.getSlotModifiedMs(serverSlot.slotId, savesPath: _savesPath);
 
     if (serverSlot.lastModifiedMs > localMs) {
       if (!mounted) return;
@@ -138,7 +168,8 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
 
     _showStatus('Uploading ${serverSlot.slotId}…');
     try {
-      final zipBytes = await _saf.readSave(serverSlot.slotId);
+      final zipBytes =
+          await _saf.readSave(serverSlot.slotId, savesPath: _savesPath);
       await _api.uploadSave(
         serverSlot.slotId,
         zipBytes,
@@ -152,14 +183,18 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
       final overwrite = await showConflictDialog(
         context,
         slotId: serverSlot.slotId,
-        targetTime: DateTime.fromMillisecondsSinceEpoch(e.serverLastModifiedMs),
-        sourceTime: DateTime.fromMillisecondsSinceEpoch(e.clientLastModifiedMs),
+        targetTime:
+            DateTime.fromMillisecondsSinceEpoch(e.serverLastModifiedMs),
+        sourceTime:
+            DateTime.fromMillisecondsSinceEpoch(e.clientLastModifiedMs),
         targetLabel: 'Server',
         sourceLabel: 'Android',
       );
       if (overwrite) {
-        final zipBytes = await _saf.readSave(serverSlot.slotId);
-        await _api.uploadSave(serverSlot.slotId, zipBytes, localMs, force: true);
+        final zipBytes =
+            await _saf.readSave(serverSlot.slotId, savesPath: _savesPath);
+        await _api.uploadSave(serverSlot.slotId, zipBytes, localMs,
+            force: true);
         _showStatus('Uploaded ${serverSlot.slotId} (forced)');
         await _refresh();
       }
@@ -170,7 +205,6 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
 
   void _showStatus(String msg) {
     if (!mounted) return;
-    setState(() => _statusMessage = msg);
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
   }
@@ -192,6 +226,11 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
             onPressed: _hasPermission ? null : _requestPermission,
           ),
           IconButton(
+            icon: const Icon(Icons.folder_open),
+            tooltip: 'Set saves folder path',
+            onPressed: _editSavesPath,
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refresh,
           ),
@@ -209,6 +248,18 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                     onPressed: _requestPermission,
                     child: const Text('Grant access')),
               ],
+            ),
+          if (_savesPath != null)
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Text(
+                'Saves: $_savesPath',
+                style: Theme.of(context).textTheme.bodySmall,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           if (_loading) const LinearProgressIndicator(),
           Expanded(
@@ -256,4 +307,56 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
       '${dt.year}-${_p(dt.month)}-${_p(dt.day)} ${_p(dt.hour)}:${_p(dt.minute)}';
 
   String _p(int n) => n.toString().padLeft(2, '0');
+}
+
+class _SavesPathDialog extends StatelessWidget {
+  final TextEditingController controller;
+  final String defaultPath;
+
+  const _SavesPathDialog({
+    required this.controller,
+    required this.defaultPath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Saves folder path'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Default: $defaultPath',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Custom path (leave empty for default)',
+              hintText: '/sdcard/...',
+              border: OutlineInputBorder(),
+            ),
+            autocorrect: false,
+            keyboardType: TextInputType.url,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(''),
+          child: const Text('Reset to default'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(controller.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
 }

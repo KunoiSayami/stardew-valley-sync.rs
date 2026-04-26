@@ -6,32 +6,35 @@ import 'package:flutter/services.dart';
 /// requires MANAGE_EXTERNAL_STORAGE ("All files access").  The Kotlin side
 /// uses direct java.io.File access once that permission is granted.
 ///
+/// All file methods accept an optional [savesPath]. When null or empty the
+/// Kotlin side falls back to the standard path:
+///   Android/data/com.chucklefish.stardewvalley/files/Saves
+///
 /// channel: "com.stardewsync/saf"
 /// methods:
-///   checkAndRequestPermission() -> bool  (opens Settings if needed)
-///   hasPermission()             -> bool
-///   listSaves()                 -> List<Map> [{slotId, lastModifiedMs}]
-///   readSave(slotId)            -> Uint8List  (ZIP bytes)
-///   writeSave(slotId, data)     -> void
-///   getSlotModifiedMs(slotId)   -> int
+///   checkAndRequestPermission()          -> bool
+///   hasPermission()                      -> bool
+///   getDefaultSavesPath()                -> String
+///   listSaves({savesPath?})              -> List<Map> [{slotId, lastModifiedMs}]
+///   readSave({slotId, savesPath?})       -> Uint8List  (ZIP bytes)
+///   writeSave({slotId, data, savesPath?})-> void
+///   getSlotModifiedMs({slotId, savesPath?}) -> int
 class SafService {
   static const _channel = MethodChannel('com.stardewsync/saf');
 
-  /// Returns true if MANAGE_EXTERNAL_STORAGE is already granted.
-  Future<bool> hasPermission() async {
-    return await _channel.invokeMethod<bool>('hasPermission') ?? false;
-  }
+  Future<bool> hasPermission() async =>
+      await _channel.invokeMethod<bool>('hasPermission') ?? false;
 
-  /// Checks permission; opens the system "All files access" settings page if
-  /// not yet granted and waits for the user to return.
-  /// Returns true if permission is now granted.
-  Future<bool> checkAndRequestPermission() async {
-    return await _channel.invokeMethod<bool>('checkAndRequestPermission') ?? false;
-  }
+  Future<bool> checkAndRequestPermission() async =>
+      await _channel.invokeMethod<bool>('checkAndRequestPermission') ?? false;
 
-  /// Lists save slots in Android/data/com.chucklefish.stardewvalley/files/Saves.
-  Future<List<({String slotId, int lastModifiedMs})>> listSaves() async {
-    final raw = await _channel.invokeListMethod<Map>('listSaves');
+  Future<String> getDefaultSavesPath() async =>
+      await _channel.invokeMethod<String>('getDefaultSavesPath') ?? '';
+
+  Future<List<({String slotId, int lastModifiedMs})>> listSaves(
+      {String? savesPath}) async {
+    final raw = await _channel
+        .invokeListMethod<Map>('listSaves', {'savesPath': savesPath});
     return (raw ?? [])
         .map((m) => (
               slotId: m['slotId'] as String,
@@ -40,23 +43,24 @@ class SafService {
         .toList();
   }
 
-  /// Builds a ZIP of the two save files and returns the raw bytes.
-  Future<Uint8List> readSave(String slotId) async {
-    final bytes = await _channel.invokeMethod<Uint8List>('readSave', {'slotId': slotId});
+  Future<Uint8List> readSave(String slotId, {String? savesPath}) async {
+    final bytes = await _channel.invokeMethod<Uint8List>(
+        'readSave', {'slotId': slotId, 'savesPath': savesPath});
     return bytes!;
   }
 
-  /// Extracts a ZIP and writes the save files, creating a .bak first.
-  Future<void> writeSave(String slotId, Uint8List zipBytes) async {
+  Future<void> writeSave(String slotId, Uint8List zipBytes,
+      {String? savesPath}) async {
     await _channel.invokeMethod<void>('writeSave', {
       'slotId': slotId,
       'data': zipBytes,
+      'savesPath': savesPath,
     });
   }
 
-  /// Returns the last-modified timestamp of a local save slot (ms since epoch).
-  Future<int> getSlotModifiedMs(String slotId) async {
-    final ms = await _channel.invokeMethod<int>('getSlotModifiedMs', {'slotId': slotId});
+  Future<int> getSlotModifiedMs(String slotId, {String? savesPath}) async {
+    final ms = await _channel.invokeMethod<int>(
+        'getSlotModifiedMs', {'slotId': slotId, 'savesPath': savesPath});
     return ms ?? 0;
   }
 }

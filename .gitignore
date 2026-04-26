@@ -16,6 +16,7 @@ android/android/app/src/main/java/
 android/android/local.properties
 android/.idea/
 android/*.iml
+android/**/*.hprof
 android/android/key.properties
 *.class
 
