@@ -29,6 +29,7 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     companion object {
         private const val CHANNEL = "com.stardewsync/saf"
         private const val REQUEST_MANAGE_STORAGE = 42002
+        private const val REQUEST_PICK_DIR = 42003
         private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
 
         fun defaultSavesPath(): String =
@@ -69,6 +70,8 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "checkAndRequestPermission" -> checkAndRequestPermission(result)
             "hasPermission"             -> result.success(hasManageStoragePermission())
             "getDefaultSavesPath"       -> result.success(defaultSavesPath())
+            "savesDirExists"            -> result.success(savesDir(call.argument<String>("savesPath")).exists())
+            "pickDirectory"             -> pickDirectory(result)
             "listSaves"                 -> listSaves(call, result)
             "readSave"                  -> readSave(call, result)
             "writeSave"                 -> writeSave(call, result)
@@ -94,12 +97,34 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         act.startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
     }
 
+    private fun pickDirectory(result: MethodChannel.Result) {
+        val act = activity ?: return result.error("NO_ACTIVITY", "No activity", null)
+        pendingResult = result
+        act.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_PICK_DIR)
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        if (requestCode != REQUEST_MANAGE_STORAGE) return false
-        val res = pendingResult ?: return false
-        pendingResult = null
-        res.success(hasManageStoragePermission())
-        return true
+        return when (requestCode) {
+            REQUEST_MANAGE_STORAGE -> {
+                val res = pendingResult ?: return false
+                pendingResult = null
+                res.success(hasManageStoragePermission())
+                true
+            }
+            REQUEST_PICK_DIR -> {
+                val res = pendingResult ?: return false
+                pendingResult = null
+                if (resultCode != Activity.RESULT_OK) { res.success(null); return true }
+                val docId = data?.data?.lastPathSegment
+                val path = if (docId != null && docId.startsWith("primary:")) {
+                    File(Environment.getExternalStorageDirectory(),
+                        docId.removePrefix("primary:")).absolutePath
+                } else null
+                res.success(path)
+                true
+            }
+            else -> false
+        }
     }
 
     private fun listSaves(call: MethodCall, result: MethodChannel.Result) {

@@ -14,7 +14,6 @@ import 'package:flutter/services.dart';
 /// methods:
 ///   checkAndRequestPermission()          -> bool
 ///   hasPermission()                      -> bool
-///   getDefaultSavesPath()                -> String
 ///   listSaves({savesPath?})              -> List<Map> [{slotId, lastModifiedMs}]
 ///   readSave({slotId, savesPath?})       -> Uint8List  (ZIP bytes)
 ///   writeSave({slotId, data, savesPath?})-> void
@@ -30,6 +29,14 @@ class SafService {
 
   Future<String> getDefaultSavesPath() async =>
       await _channel.invokeMethod<String>('getDefaultSavesPath') ?? '';
+
+  Future<String?> pickDirectory() async =>
+      await _channel.invokeMethod<String>('pickDirectory');
+
+  Future<bool> savesDirExists({String? savesPath}) async =>
+      await _channel.invokeMethod<bool>(
+          'savesDirExists', {'savesPath': savesPath}) ??
+      false;
 
   Future<List<({String slotId, int lastModifiedMs})>> listSaves(
       {String? savesPath}) async {

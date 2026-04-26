@@ -34,6 +34,8 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   bool _hasPermission = false;
   String? _savesPath; // null = use default
   List<SaveSlot> _serverSlots = [];
+  Set<String> _localSlotIds = {};
+  bool _dirMissing = false;
   bool _loading = false;
 
   @override
@@ -97,6 +99,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
       builder: (ctx) => _SavesPathDialog(
         controller: controller,
         defaultPath: defaultPath,
+        saf: _saf,
       ),
     );
 
@@ -109,14 +112,27 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     } else {
       await prefs.setString(_kSavesPathKey, newPath);
     }
-    if (mounted) setState(() => _savesPath = newPath);
+    if (mounted) {
+      setState(() => _savesPath = newPath);
+      _refresh();
+    }
   }
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      final slots = await _api.listSaves();
-      setState(() => _serverSlots = slots);
+      final (serverSlots, dirExists, localSlots) = await (
+        _api.listSaves(),
+        _saf.savesDirExists(savesPath: _savesPath),
+        _saf.listSaves(savesPath: _savesPath),
+      ).wait;
+      if (mounted) {
+        setState(() {
+          _serverSlots = serverSlots;
+          _dirMissing = !dirExists;
+          _localSlotIds = {for (final s in localSlots) s.slotId};
+        });
+      }
     } catch (e) {
       _showStatus('Failed to load saves: $e');
     } finally {
@@ -266,7 +282,19 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                     child: const Text('Grant access')),
               ],
             ),
-          if (_savesPath != null)
+          if (_dirMissing)
+            MaterialBanner(
+              content: Text(
+                  'Saves directory not found: ${_savesPath ?? 'default path'}. '
+                  'Tap the folder icon to set the correct path.'),
+              leading: const Icon(Icons.warning_amber, color: Colors.orange),
+              actions: [
+                TextButton(
+                    onPressed: _editSavesPath,
+                    child: const Text('Change path')),
+              ],
+            ),
+          if (_savesPath != null && !_dirMissing)
             Container(
               width: double.infinity,
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -306,8 +334,12 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                             ),
                             IconButton(
                               icon: const Icon(Icons.upload),
-                              tooltip: 'Push from Android to server',
-                              onPressed: () => _push(slot),
+                              tooltip: _localSlotIds.contains(slot.slotId)
+                                  ? 'Push from Android to server'
+                                  : 'No local save found',
+                              onPressed: _localSlotIds.contains(slot.slotId)
+                                  ? () => _push(slot)
+                                  : null,
                             ),
                           ],
                         ),
@@ -326,14 +358,32 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   String _p(int n) => n.toString().padLeft(2, '0');
 }
 
-class _SavesPathDialog extends StatelessWidget {
+class _SavesPathDialog extends StatefulWidget {
   final TextEditingController controller;
   final String defaultPath;
+  final SafService saf;
 
   const _SavesPathDialog({
     required this.controller,
     required this.defaultPath,
+    required this.saf,
   });
+
+  @override
+  State<_SavesPathDialog> createState() => _SavesPathDialogState();
+}
+
+class _SavesPathDialogState extends State<_SavesPathDialog> {
+  bool _picking = false;
+
+  Future<void> _browse() async {
+    setState(() => _picking = true);
+    final picked = await widget.saf.pickDirectory();
+    if (mounted) {
+      setState(() => _picking = false);
+      if (picked != null) widget.controller.text = picked;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -344,16 +394,27 @@ class _SavesPathDialog extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Default: $defaultPath',
+            'Default: ${widget.defaultPath}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
           TextField(
-            controller: controller,
-            decoration: const InputDecoration(
+            controller: widget.controller,
+            decoration: InputDecoration(
               labelText: 'Custom path (leave empty for default)',
               hintText: '/sdcard/...',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: _picking
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.folder_open),
+                tooltip: 'Browse',
+                onPressed: _picking ? null : _browse,
+              ),
             ),
             autocorrect: false,
             keyboardType: TextInputType.url,
@@ -370,7 +431,7 @@ class _SavesPathDialog extends StatelessWidget {
           child: const Text('Reset to default'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(controller.text),
+          onPressed: () => Navigator.of(context).pop(widget.controller.text),
           child: const Text('Save'),
         ),
       ],
