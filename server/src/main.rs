@@ -4,7 +4,6 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use clap::Parser;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::info;
@@ -35,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let cfg = Config::parse();
+    let cfg = Config::load()?;
     let saves_dir = cfg.saves_dir_resolved();
 
     if !saves_dir.exists() {
