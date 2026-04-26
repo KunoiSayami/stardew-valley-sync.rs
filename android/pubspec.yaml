@@ -1,0 +1,37 @@
+name: stardew_sync
+description: Sync Stardew Valley saves between PC and Android over local Wi-Fi.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP client
+  dio: ^5.7.0
+
+  # mDNS auto-discovery
+  multicast_dns: ^0.3.2
+
+  # SAF file picker (ACTION_OPEN_DOCUMENT_TREE)
+  file_picker: ^8.1.0
+
+  # Persist server IP + PIN across launches
+  shared_preferences: ^2.3.0
+
+  # State management
+  provider: ^6.1.0
+
+  # Runtime permission requests (INTERNET, storage)
+  permission_handler: ^11.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

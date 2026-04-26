@@ -1,0 +1,27 @@
+# Rust
+target/
+Cargo.lock
+
+# Flutter / Android Studio
+android/.dart_tool/
+android/build/
+android/.flutter-plugins
+android/.flutter-plugins-dependencies
+android/.packages
+android/android/.gradle/
+android/android/app/build/
+android/android/local.properties
+android/.idea/
+android/*.iml
+android/android/key.properties
+*.class
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
