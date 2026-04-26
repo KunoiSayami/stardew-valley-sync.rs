@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+//import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
@@ -24,8 +24,8 @@ class SafService {
   /// Lists save slots under the previously granted URI.
   Future<List<({String slotId, int lastModifiedMs})>> listSaves(
       String treeUri) async {
-    final raw = await _channel
-        .invokeListMethod<Map>('listSaves', {'uri': treeUri});
+    final raw =
+        await _channel.invokeListMethod<Map>('listSaves', {'uri': treeUri});
     return (raw ?? [])
         .map((m) => (
               slotId: m['slotId'] as String,
@@ -36,8 +36,8 @@ class SafService {
 
   /// Builds a ZIP of the two save files and returns the raw bytes.
   Future<Uint8List> readSave(String treeUri, String slotId) async {
-    final bytes = await _channel
-        .invokeMethod<Uint8List>('readSave', {'uri': treeUri, 'slotId': slotId});
+    final bytes = await _channel.invokeMethod<Uint8List>(
+        'readSave', {'uri': treeUri, 'slotId': slotId});
     return bytes!;
   }
 
