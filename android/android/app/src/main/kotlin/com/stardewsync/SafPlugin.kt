@@ -29,7 +29,6 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     companion object {
         private const val CHANNEL = "com.stardewsync/saf"
         private const val REQUEST_MANAGE_STORAGE = 42002
-        private const val REQUEST_PICK_DIR = 42003
         private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
 
         fun defaultSavesPath(): String =
@@ -70,8 +69,8 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             "checkAndRequestPermission" -> checkAndRequestPermission(result)
             "hasPermission"             -> result.success(hasManageStoragePermission())
             "getDefaultSavesPath"       -> result.success(defaultSavesPath())
+            "listDirectory"             -> listDirectory(call, result)
             "savesDirExists"            -> result.success(savesDir(call.argument<String>("savesPath")).exists())
-            "pickDirectory"             -> pickDirectory(result)
             "listSaves"                 -> listSaves(call, result)
             "readSave"                  -> readSave(call, result)
             "writeSave"                 -> writeSave(call, result)
@@ -80,15 +79,14 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    // ── Permission ────────────────────────────────────────────────────────────
+
     private fun hasManageStoragePermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             Environment.isExternalStorageManager()
 
     private fun checkAndRequestPermission(result: MethodChannel.Result) {
-        if (hasManageStoragePermission()) {
-            result.success(true)
-            return
-        }
+        if (hasManageStoragePermission()) { result.success(true); return }
         val act = activity ?: return result.error("NO_ACTIVITY", "No activity", null)
         pendingResult = result
         val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
@@ -97,35 +95,32 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         act.startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
     }
 
-    private fun pickDirectory(result: MethodChannel.Result) {
-        val act = activity ?: return result.error("NO_ACTIVITY", "No activity", null)
-        pendingResult = result
-        act.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_PICK_DIR)
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode != REQUEST_MANAGE_STORAGE) return false
+        val res = pendingResult ?: return false
+        pendingResult = null
+        res.success(hasManageStoragePermission())
+        return true
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        return when (requestCode) {
-            REQUEST_MANAGE_STORAGE -> {
-                val res = pendingResult ?: return false
-                pendingResult = null
-                res.success(hasManageStoragePermission())
-                true
-            }
-            REQUEST_PICK_DIR -> {
-                val res = pendingResult ?: return false
-                pendingResult = null
-                if (resultCode != Activity.RESULT_OK) { res.success(null); return true }
-                val docId = data?.data?.lastPathSegment
-                val path = if (docId != null && docId.startsWith("primary:")) {
-                    File(Environment.getExternalStorageDirectory(),
-                        docId.removePrefix("primary:")).absolutePath
-                } else null
-                res.success(path)
-                true
-            }
-            else -> false
+    // ── Directory listing (for in-app browser) ────────────────────────────────
+
+    private fun listDirectory(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+            ?: return result.error("NO_PATH", "path required", null)
+        val dir = File(path)
+        if (!dir.exists() || !dir.isDirectory) {
+            return result.error("NOT_DIR", "Not a directory: $path", null)
         }
+        val entries = dir.listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedBy { it.name.lowercase() }
+            ?.map { mapOf("name" to it.name, "path" to it.absolutePath) }
+            ?: emptyList()
+        result.success(entries)
     }
+
+    // ── Save file operations ──────────────────────────────────────────────────
 
     private fun listSaves(call: MethodCall, result: MethodChannel.Result) {
         val dir = savesDir(call.argument<String>("savesPath"))
@@ -139,13 +134,11 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 val lastModMs = maxOf(mainFile.lastModified(), infoFile.lastModified())
                 mapOf("slotId" to slotDir.name, "lastModifiedMs" to lastModMs)
             } ?: emptyList()
-
         result.success(slots)
     }
 
     private fun readSave(call: MethodCall, result: MethodChannel.Result) {
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
-
         val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
         val mainFile = File(slotDir, slotId).takeIf { it.exists() }
             ?: return result.error("NOT_FOUND", "Main save file not found in $slotId", null)
@@ -154,8 +147,8 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
         val buf = ByteArrayOutputStream()
         ZipOutputStream(buf).use { zip ->
-            fun addEntry(file: File, entryName: String) {
-                zip.putNextEntry(ZipEntry(entryName))
+            fun addEntry(file: File, name: String) {
+                zip.putNextEntry(ZipEntry(name))
                 file.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
             }
@@ -168,24 +161,17 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun writeSave(call: MethodCall, result: MethodChannel.Result) {
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
         val data = call.argument<ByteArray>("data") ?: return result.error("NO_DATA", "data required", null)
-
         val savesRoot = savesDir(call.argument<String>("savesPath"))
         savesRoot.mkdirs()
 
         val existing = File(savesRoot, slotId)
-        if (existing.exists()) {
-            val backupName = "$slotId.bak.${System.currentTimeMillis()}"
-            existing.renameTo(File(savesRoot, backupName))
-        }
+        if (existing.exists()) existing.renameTo(File(savesRoot, "$slotId.bak.${System.currentTimeMillis()}"))
 
-        val newDir = File(savesRoot, slotId)
-        newDir.mkdirs()
-
+        val newDir = File(savesRoot, slotId).also { it.mkdirs() }
         ZipInputStream(ByteArrayInputStream(data)).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
-                val outFile = File(newDir, entry.name)
-                outFile.outputStream().use { zip.copyTo(it) }
+                File(newDir, entry.name).outputStream().use { zip.copyTo(it) }
                 zip.closeEntry()
                 entry = zip.nextEntry
             }
@@ -195,15 +181,10 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
 
     private fun getSlotModifiedMs(call: MethodCall, result: MethodChannel.Result) {
         val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
-
         val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
         val mainFile = File(slotDir, slotId)
         val infoFile = File(slotDir, "SaveGameInfo")
-
-        if (!mainFile.exists() || !infoFile.exists()) {
-            result.success(0L)
-            return
-        }
+        if (!mainFile.exists() || !infoFile.exists()) { result.success(0L); return }
         result.success(maxOf(mainFile.lastModified(), infoFile.lastModified()))
     }
 }

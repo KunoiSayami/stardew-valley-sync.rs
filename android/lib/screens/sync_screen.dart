@@ -1,9 +1,8 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/save_slot.dart';
+import 'directory_browser.dart';
 import 'server_connect_screen.dart';
 import '../services/api_client.dart';
 import '../services/saf_service.dart';
@@ -244,15 +243,15 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
         title: Text('${widget.ip}:${widget.port}'),
         actions: [
           IconButton(
-            icon: Icon(
-              _hasPermission ? Icons.lock_open : Icons.lock,
-              color: _hasPermission ? null : Colors.orange,
+              icon: Icon(
+                _hasPermission ? Icons.lock_open : Icons.lock,
+                color: _hasPermission ? null : Colors.orange,
+              ),
+              tooltip: _hasPermission
+                  ? 'Storage access granted'
+                  : 'Grant "All files access" permission',
+              onPressed: _hasPermission ? null : _requestPermission,
             ),
-            tooltip: _hasPermission
-                ? 'Storage access granted'
-                : 'Grant "All files access" permission',
-            onPressed: _hasPermission ? null : _requestPermission,
-          ),
           IconButton(
             icon: const Icon(Icons.folder_open),
             tooltip: 'Set saves folder path',
@@ -274,7 +273,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
           if (!_hasPermission)
             MaterialBanner(
               content: const Text(
-                  'Storage permission required to access Stardew Valley saves. '
+                  'Storage permission required for custom path. '
                   'Tap the lock icon to grant "All files access".'),
               actions: [
                 TextButton(
@@ -374,14 +373,20 @@ class _SavesPathDialog extends StatefulWidget {
 }
 
 class _SavesPathDialogState extends State<_SavesPathDialog> {
-  bool _picking = false;
-
   Future<void> _browse() async {
-    setState(() => _picking = true);
-    final picked = await widget.saf.pickDirectory();
-    if (mounted) {
-      setState(() => _picking = false);
-      if (picked != null) widget.controller.text = picked;
+    final initialPath = widget.controller.text.trim().isNotEmpty
+        ? widget.controller.text.trim()
+        : widget.defaultPath;
+    final picked = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => DirectoryBrowser(
+          saf: widget.saf,
+          initialPath: initialPath,
+        ),
+      ),
+    );
+    if (picked != null && mounted) {
+      widget.controller.text = picked;
     }
   }
 
@@ -405,15 +410,9 @@ class _SavesPathDialogState extends State<_SavesPathDialog> {
               hintText: '/sdcard/...',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
-                icon: _picking
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.folder_open),
+                icon: const Icon(Icons.folder_open),
                 tooltip: 'Browse',
-                onPressed: _picking ? null : _browse,
+                onPressed: _browse,
               ),
             ),
             autocorrect: false,

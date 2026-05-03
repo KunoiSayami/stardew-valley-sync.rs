@@ -2,21 +2,19 @@ import 'package:flutter/services.dart';
 
 /// Dart-side wrapper around the Kotlin file-access platform channel.
 ///
-/// On Android 11+ the Stardew save directory is inside Android/data/ which
-/// requires MANAGE_EXTERNAL_STORAGE ("All files access").  The Kotlin side
-/// uses direct java.io.File access once that permission is granted.
-///
-/// All file methods accept an optional [savesPath]. When null or empty the
-/// Kotlin side falls back to the standard path:
-///   Android/data/com.chucklefish.stardewvalley/files/Saves
+/// All file access uses direct java.io.File with MANAGE_EXTERNAL_STORAGE.
+/// listDirectory() is used by the in-app directory browser.
 ///
 /// channel: "com.stardewsync/saf"
 /// methods:
-///   checkAndRequestPermission()          -> bool
-///   hasPermission()                      -> bool
-///   listSaves({savesPath?})              -> List<Map> [{slotId, lastModifiedMs}]
-///   readSave({slotId, savesPath?})       -> Uint8List  (ZIP bytes)
-///   writeSave({slotId, data, savesPath?})-> void
+///   checkAndRequestPermission()             -> bool
+///   hasPermission()                         -> bool
+///   getDefaultSavesPath()                   -> String
+///   listDirectory({path})                   -> List<Map> [{name, path}]
+///   savesDirExists({savesPath?})            -> bool
+///   listSaves({savesPath?})                 -> List<Map> [{slotId, lastModifiedMs}]
+///   readSave({slotId, savesPath?})          -> Uint8List
+///   writeSave({slotId, data, savesPath?})   -> void
 ///   getSlotModifiedMs({slotId, savesPath?}) -> int
 class SafService {
   static const _channel = MethodChannel('com.stardewsync/saf');
@@ -30,8 +28,14 @@ class SafService {
   Future<String> getDefaultSavesPath() async =>
       await _channel.invokeMethod<String>('getDefaultSavesPath') ?? '';
 
-  Future<String?> pickDirectory() async =>
-      await _channel.invokeMethod<String>('pickDirectory');
+  /// Lists subdirectories of [path] for the in-app directory browser.
+  Future<List<({String name, String path})>> listDirectory(String path) async {
+    final raw =
+        await _channel.invokeListMethod<Map>('listDirectory', {'path': path});
+    return (raw ?? [])
+        .map((m) => (name: m['name'] as String, path: m['path'] as String))
+        .toList();
+  }
 
   Future<bool> savesDirExists({String? savesPath}) async =>
       await _channel.invokeMethod<bool>(
