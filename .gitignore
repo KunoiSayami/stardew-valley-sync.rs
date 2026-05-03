@@ -18,6 +18,7 @@ android/.idea/
 android/*.iml
 android/**/*.hprof
 android/android/key.properties
+android/lib/debug_config.dart
 *.class
 
 # IDE
