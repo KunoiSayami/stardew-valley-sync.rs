@@ -34,6 +34,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
 
   bool _hasPermission = false;
   FileAccessMode _fileAccessMode = FileAccessMode.manageStorage;
+  bool _shizukuSuggestionDismissed = false;
   String? _savesPath; // null = use default
   List<SaveSlot> _serverSlots = [];
   Set<String> _localSlotIds = {};
@@ -60,7 +61,12 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkPermission();
+    if (state == AppLifecycleState.resumed) _checkPermissionAndRefresh();
+  }
+
+  Future<void> _checkPermissionAndRefresh() async {
+    await _checkPermission();
+    if (_hasPermission) await _refresh();
   }
 
   Future<void> _init() async {
@@ -68,13 +74,48 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     final saved = prefs.getString(_kSavesPathKey);
     if (mounted) setState(() => _savesPath = saved);
     final mode = fileAccessModeFromChannel(await _saf.getFileAccessMode());
-    if (mounted) setState(() => _fileAccessMode = mode);
+    if (mounted) setState(() {
+      if (mode != _fileAccessMode) _shizukuSuggestionDismissed = false;
+      _fileAccessMode = mode;
+    });
     await _checkPermission();
   }
 
   Future<void> _checkPermission() async {
     final granted = await _saf.hasPermission();
     if (mounted) setState(() => _hasPermission = granted);
+  }
+
+  void _suggestShizuku() {
+    _shizukuSuggestionDismissed = true;
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Use Shizuku instead?'),
+        content: const Text(
+          '"All Files Access" is not granted. '
+          'Shizuku is available and can access save files without that permission. '
+          'Would you like to switch to Shizuku mode?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('No, stay'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Switch to Shizuku'),
+          ),
+        ],
+      ),
+    ).then((confirmed) async {
+      if (confirmed != true || !mounted) return;
+      await _saf.setFileAccessMode(FileAccessMode.shizuku.toChannelValue());
+      setState(() => _fileAccessMode = FileAccessMode.shizuku);
+      await _checkPermission();
+      // If Shizuku permission also not yet granted, request it now.
+      if (mounted && !_hasPermission) await _requestPermission();
+    });
   }
 
   Future<void> _disconnect() async {
@@ -146,6 +187,14 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
           _dirMissing = !dirExists;
           _localSlotIds = {for (final s in localSlots) s.slotId};
         });
+        // Permission granted but dir still inaccessible — offer Shizuku.
+        if (_hasPermission &&
+            _dirMissing &&
+            _fileAccessMode == FileAccessMode.manageStorage &&
+            !_shizukuSuggestionDismissed) {
+          final shizukuAvail = await _saf.isShizukuAvailable();
+          if (mounted && shizukuAvail) _suggestShizuku();
+        }
       }
     } catch (e) {
       _showStatus('Failed to load saves: $e');
