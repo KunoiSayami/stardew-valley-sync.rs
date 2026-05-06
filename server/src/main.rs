@@ -17,6 +17,8 @@ mod config;
 mod error;
 mod routes;
 mod saves;
+#[cfg(target_os = "windows")]
+mod tray;
 
 use auth::PinAuthLayer;
 use config::Config;
@@ -30,10 +32,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MDNS_SERVICE_TYPE: &str = "_stardewsync._tcp.local.";
 const MDNS_INSTANCE: &str = "StardewSync";
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+// ── Windows entry point ────────────────────────────────────────────────────
+#[cfg(target_os = "windows")]
+fn main() -> anyhow::Result<()> {
     let (cfg, config_path) = Config::load()?;
-
     // Hold the guard for the process lifetime so the non-blocking writer is not dropped.
     let _log_guard = init_logging(&cfg);
 
@@ -45,7 +47,6 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
     let saves_dir = cfg.saves_dir_resolved();
-
     if !saves_dir.exists() {
         tracing::warn!(
             "Saves directory does not exist: {}. \
@@ -53,17 +54,63 @@ async fn main() -> anyhow::Result<()> {
             saves_dir.display()
         );
     }
-
     info!("Saves directory: {}", saves_dir.display());
     info!("Listening on port {}", cfg.port);
 
+    let port = cfg.port;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let rt = tokio::runtime::Runtime::new()?;
+    let server_handle = rt.spawn(run_server(cfg, shutdown_rx));
+
+    // Blocks the main thread in the Win32 message pump until Exit is clicked.
+    tray::run(port, shutdown_tx)?;
+    rt.block_on(server_handle)??;
+    info!("Server shut down gracefully");
+    Ok(())
+}
+
+// ── Non-Windows entry point ────────────────────────────────────────────────
+#[cfg(not(target_os = "windows"))]
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let (cfg, config_path) = Config::load()?;
+    let _log_guard = init_logging(&cfg);
+
+    match &config_path {
+        Some(p) => info!("Config file: {}", p.display()),
+        None => info!(
+            "No config file found (default: {})",
+            config::default_config_path().display()
+        ),
+    }
+    let saves_dir = cfg.saves_dir_resolved();
+    if !saves_dir.exists() {
+        tracing::warn!(
+            "Saves directory does not exist: {}. \
+             Create it or pass --saves-dir.",
+            saves_dir.display()
+        );
+    }
+    info!("Saves directory: {}", saves_dir.display());
+    info!("Listening on port {}", cfg.port);
+
+    let (_, shutdown_rx) = tokio::sync::watch::channel(false);
+    axum_serve_with_ctrlc(cfg, shutdown_rx).await?;
+    info!("Server shut down gracefully");
+    Ok(())
+}
+
+async fn run_server(
+    cfg: Config,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let saves_dir = cfg.saves_dir_resolved();
     let state = AppState {
         saves_dir: Arc::new(saves_dir),
         pin: Arc::new(cfg.pin.clone()),
         version: VERSION,
     };
 
-    // Routes that require PIN auth
     let protected = Router::new()
         .route("/api/v1/saves", get(saves_list_handler))
         .route("/api/v1/saves/{slot_id}/download", get(download_handler))
@@ -78,7 +125,60 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // mDNS advertisement
+    let mdns_port = cfg.port;
+    tokio::spawn(async move {
+        match advertise_mdns(mdns_port) {
+            Ok(_) => info!("mDNS service advertised on port {mdns_port}"),
+            Err(e) => tracing::warn!("mDNS advertisement failed: {e}"),
+        }
+    });
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
+    info!("Server running at http://{addr}");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            loop {
+                if shutdown_rx.changed().await.is_err() {
+                    break;
+                }
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            info!("Shutdown signal received, waiting for in-flight requests…");
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn axum_serve_with_ctrlc(
+    cfg: Config,
+    _shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let saves_dir = cfg.saves_dir_resolved();
+    let state = AppState {
+        saves_dir: Arc::new(saves_dir),
+        pin: Arc::new(cfg.pin.clone()),
+        version: VERSION,
+    };
+
+    let protected = Router::new()
+        .route("/api/v1/saves", get(saves_list_handler))
+        .route("/api/v1/saves/{slot_id}/download", get(download_handler))
+        .route("/api/v1/saves/{slot_id}/upload", post(upload_handler))
+        .route("/api/v1/saves/{slot_id}", delete(delete_handler))
+        .layer(PinAuthLayer::new(cfg.pin.clone()))
+        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
+
+    let app = Router::new()
+        .route("/health", get(health_handler))
+        .merge(protected)
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
+
     let mdns_port = cfg.port;
     tokio::spawn(async move {
         match advertise_mdns(mdns_port) {
@@ -94,10 +194,10 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    info!("Server shut down gracefully");
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -143,7 +243,6 @@ fn init_logging(cfg: &Config) -> Option<WorkerGuard> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("stardew-sync-server");
 
-    // tracing-appender creates the directory if needed
     let file_appender = tracing_appender::rolling::daily(&log_dir, "server.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
