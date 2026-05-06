@@ -49,8 +49,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
       baseUrl: 'http://${widget.ip}:${widget.port}',
       pin: widget.pin,
     );
-    _init();
-    _refresh();
+    _init().then((_) => _refresh());
   }
 
   @override
