@@ -1,0 +1,74 @@
+name: Build
+
+on:
+  push:
+
+jobs:
+  build-server:
+    name: Build server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: stardew-sync-server
+            archive: stardew-sync-server-linux-x86_64.tar.gz
+          - os: windows-latest
+            artifact: stardew-sync-server.exe
+            archive: stardew-sync-server-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p server
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.archive }} -C target/release ${{ matrix.artifact }}
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/${{ matrix.artifact }} -DestinationPath ${{ matrix.archive }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  build-android:
+    name: Build Android client
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create debug config
+        run: cp android/lib/debug_config.dart.example android/lib/debug_config.dart
+
+      - name: Flutter pub get
+        working-directory: android
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: android
+        run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stardew-sync-android.apk
+          path: android/build/app/outputs/flutter-apk/app-release.apk
+
