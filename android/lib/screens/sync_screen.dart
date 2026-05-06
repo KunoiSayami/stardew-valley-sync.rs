@@ -3,8 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/save_slot.dart';
 import 'directory_browser.dart';
+import 'file_access_settings_screen.dart';
 import 'server_connect_screen.dart';
 import '../services/api_client.dart';
+import '../services/file_access_mode.dart';
 import '../services/saf_service.dart';
 import '../widgets/conflict_dialog.dart';
 
@@ -31,6 +33,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   final _saf = SafService();
 
   bool _hasPermission = false;
+  FileAccessMode _fileAccessMode = FileAccessMode.manageStorage;
   String? _savesPath; // null = use default
   List<SaveSlot> _serverSlots = [];
   Set<String> _localSlotIds = {};
@@ -64,6 +67,8 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_kSavesPathKey);
     if (mounted) setState(() => _savesPath = saved);
+    final mode = fileAccessModeFromChannel(await _saf.getFileAccessMode());
+    if (mounted) setState(() => _fileAccessMode = mode);
     await _checkPermission();
   }
 
@@ -86,6 +91,16 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   Future<void> _requestPermission() async {
     final granted = await _saf.checkAndRequestPermission();
     if (mounted) setState(() => _hasPermission = granted);
+  }
+
+  Future<void> _openAccessSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FileAccessSettingsScreen(saf: _saf),
+      ),
+    );
+    await _init();
+    await _refresh();
   }
 
   Future<void> _editSavesPath() async {
@@ -249,9 +264,14 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
               ),
               tooltip: _hasPermission
                   ? 'Storage access granted'
-                  : 'Grant "All files access" permission',
+                  : 'Grant file access permission',
               onPressed: _hasPermission ? null : _requestPermission,
             ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'File access settings',
+            onPressed: _openAccessSettings,
+          ),
           IconButton(
             icon: const Icon(Icons.folder_open),
             tooltip: 'Set saves folder path',
@@ -272,9 +292,11 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
         children: [
           if (!_hasPermission)
             MaterialBanner(
-              content: const Text(
-                  'Storage permission required for custom path. '
-                  'Tap the lock icon to grant "All files access".'),
+              content: Text(
+                _fileAccessMode == FileAccessMode.shizuku
+                    ? 'Shizuku permission required. Tap the lock icon to grant access.'
+                    : 'Storage permission required. Tap the lock icon to grant "All files access".',
+              ),
               actions: [
                 TextButton(
                     onPressed: _requestPermission,

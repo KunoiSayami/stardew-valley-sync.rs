@@ -53,4 +53,7 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.1.0"
     // DocumentFile SAF support
     implementation "androidx.documentfile:documentfile:1.0.1"
+    // Shizuku privileged file access
+    implementation "dev.rikka.shizuku:api:13.1.5"
+    implementation "dev.rikka.shizuku:provider:13.1.5"
 }

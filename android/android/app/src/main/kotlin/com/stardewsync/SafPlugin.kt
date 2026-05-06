@@ -1,190 +1,156 @@
 package com.stardewsync
 
-import android.app.Activity
+import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.Settings
+import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 
 class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     ActivityAware, PluginRegistry.ActivityResultListener {
 
     private lateinit var channel: MethodChannel
-    private var activity: Activity? = null
-    private var pendingResult: MethodChannel.Result? = null
+    private lateinit var prefs: SharedPreferences
+
+    private val manageBackend = ManageStorageBackend()
+    private val shizukuBackend = ShizukuBackend()
+
+    private var currentMode: FileAccessMode = FileAccessMode.MANAGE_STORAGE
+    private var pendingDartResult: MethodChannel.Result? = null
+
+    private val activeBackend: FileAccessBackend
+        get() = when (currentMode) {
+            FileAccessMode.SHIZUKU -> shizukuBackend
+            else -> manageBackend
+        }
 
     companion object {
         private const val CHANNEL = "com.stardewsync/saf"
-        private const val REQUEST_MANAGE_STORAGE = 42002
-        private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
-
-        fun defaultSavesPath(): String =
-            File(
-                Environment.getExternalStorageDirectory(),
-                "Android/data/$STARDEW_PACKAGE/files/Saves"
-            ).absolutePath
-
-        private fun savesDir(customPath: String?): File =
-            if (!customPath.isNullOrBlank()) File(customPath) else File(defaultSavesPath())
+        private const val PREFS_NAME = "stardewsync_prefs"
+        private const val PREFS_MODE_KEY = "file_access_mode"
     }
 
+    // ── FlutterPlugin ────────────────────────────────────────────────────────
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        prefs = binding.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        currentMode = loadMode()
         channel = MethodChannel(binding.binaryMessenger, CHANNEL)
         channel.setMethodCallHandler(this)
+        shizukuBackend.registerListeners()
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        shizukuBackend.unregisterListeners()
         channel.setMethodCallHandler(null)
     }
 
+    // ── ActivityAware ────────────────────────────────────────────────────────
+
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        activity = binding.activity
+        manageBackend.activity = binding.activity
         binding.addActivityResultListener(this)
     }
 
-    override fun onDetachedFromActivityForConfigChanges() { activity = null }
+    override fun onDetachedFromActivityForConfigChanges() { manageBackend.activity = null }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
-        activity = binding.activity
+        manageBackend.activity = binding.activity
         binding.addActivityResultListener(this)
     }
 
-    override fun onDetachedFromActivity() { activity = null }
+    override fun onDetachedFromActivity() { manageBackend.activity = null }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean =
+        manageBackend.handleActivityResult(requestCode, resultCode, data)
+
+    // ── MethodCallHandler ────────────────────────────────────────────────────
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "checkAndRequestPermission" -> checkAndRequestPermission(result)
-            "hasPermission"             -> result.success(hasManageStoragePermission())
-            "getDefaultSavesPath"       -> result.success(defaultSavesPath())
-            "listDirectory"             -> listDirectory(call, result)
-            "savesDirExists"            -> result.success(savesDir(call.argument<String>("savesPath")).exists())
-            "listSaves"                 -> listSaves(call, result)
-            "readSave"                  -> readSave(call, result)
-            "writeSave"                 -> writeSave(call, result)
-            "getSlotModifiedMs"         -> getSlotModifiedMs(call, result)
-            else                        -> result.notImplemented()
-        }
-    }
-
-    // ── Permission ────────────────────────────────────────────────────────────
-
-    private fun hasManageStoragePermission(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-            Environment.isExternalStorageManager()
-
-    private fun checkAndRequestPermission(result: MethodChannel.Result) {
-        if (hasManageStoragePermission()) { result.success(true); return }
-        val act = activity ?: return result.error("NO_ACTIVITY", "No activity", null)
-        pendingResult = result
-        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-            data = Uri.parse("package:${act.packageName}")
-        }
-        act.startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        if (requestCode != REQUEST_MANAGE_STORAGE) return false
-        val res = pendingResult ?: return false
-        pendingResult = null
-        res.success(hasManageStoragePermission())
-        return true
-    }
-
-    // ── Directory listing (for in-app browser) ────────────────────────────────
-
-    private fun listDirectory(call: MethodCall, result: MethodChannel.Result) {
-        val path = call.argument<String>("path")
-            ?: return result.error("NO_PATH", "path required", null)
-        val dir = File(path)
-        if (!dir.exists() || !dir.isDirectory) {
-            return result.error("NOT_DIR", "Not a directory: $path", null)
-        }
-        val entries = dir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.sortedBy { it.name.lowercase() }
-            ?.map { mapOf("name" to it.name, "path" to it.absolutePath) }
-            ?: emptyList()
-        result.success(entries)
-    }
-
-    // ── Save file operations ──────────────────────────────────────────────────
-
-    private fun listSaves(call: MethodCall, result: MethodChannel.Result) {
-        val dir = savesDir(call.argument<String>("savesPath"))
-        if (!dir.exists()) return result.success(emptyList<Any>())
-
-        val slots = dir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { slotDir ->
-                val mainFile = File(slotDir, slotDir.name).takeIf { it.exists() } ?: return@mapNotNull null
-                val infoFile = File(slotDir, "SaveGameInfo").takeIf { it.exists() } ?: return@mapNotNull null
-                val lastModMs = maxOf(mainFile.lastModified(), infoFile.lastModified())
-                mapOf("slotId" to slotDir.name, "lastModifiedMs" to lastModMs)
-            } ?: emptyList()
-        result.success(slots)
-    }
-
-    private fun readSave(call: MethodCall, result: MethodChannel.Result) {
-        val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
-        val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
-        val mainFile = File(slotDir, slotId).takeIf { it.exists() }
-            ?: return result.error("NOT_FOUND", "Main save file not found in $slotId", null)
-        val infoFile = File(slotDir, "SaveGameInfo").takeIf { it.exists() }
-            ?: return result.error("NOT_FOUND", "SaveGameInfo not found in $slotId", null)
-
-        val buf = ByteArrayOutputStream()
-        ZipOutputStream(buf).use { zip ->
-            fun addEntry(file: File, name: String) {
-                zip.putNextEntry(ZipEntry(name))
-                file.inputStream().use { it.copyTo(zip) }
-                zip.closeEntry()
+            "getFileAccessMode" -> result.success(currentMode.name)
+            "setFileAccessMode" -> {
+                val raw = call.argument<String>("mode")
+                    ?: return result.error("NO_MODE", "mode required", null)
+                val mode = runCatching { FileAccessMode.valueOf(raw) }.getOrNull()
+                    ?: return result.error("BAD_MODE", "Unknown mode: $raw", null)
+                currentMode = mode
+                saveMode(mode)
+                result.success(null)
             }
-            addEntry(mainFile, slotId)
-            addEntry(infoFile, "SaveGameInfo")
-        }
-        result.success(buf.toByteArray())
-    }
-
-    private fun writeSave(call: MethodCall, result: MethodChannel.Result) {
-        val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
-        val data = call.argument<ByteArray>("data") ?: return result.error("NO_DATA", "data required", null)
-        val savesRoot = savesDir(call.argument<String>("savesPath"))
-        savesRoot.mkdirs()
-
-        val existing = File(savesRoot, slotId)
-        if (existing.exists()) existing.renameTo(File(savesRoot, "$slotId.bak.${System.currentTimeMillis()}"))
-
-        val newDir = File(savesRoot, slotId).also { it.mkdirs() }
-        ZipInputStream(ByteArrayInputStream(data)).use { zip ->
-            var entry = zip.nextEntry
-            while (entry != null) {
-                File(newDir, entry.name).outputStream().use { zip.copyTo(it) }
-                zip.closeEntry()
-                entry = zip.nextEntry
+            "isShizukuAvailable" -> result.success(shizukuBackend.isShizukuAvailable())
+            "checkAndRequestPermission" -> {
+                if (pendingDartResult != null) {
+                    result.error("IN_PROGRESS", "Permission request already in progress", null)
+                    return
+                }
+                pendingDartResult = result
+                activeBackend.requestPermission { granted ->
+                    val res = pendingDartResult ?: return@requestPermission
+                    pendingDartResult = null
+                    Handler(Looper.getMainLooper()).post { res.success(granted) }
+                }
             }
+            "hasPermission"       -> result.success(activeBackend.hasPermission())
+            "getDefaultSavesPath" -> result.success(activeBackend.getDefaultSavesPath())
+            "listDirectory"       -> dispatch(result) {
+                val path = call.argument<String>("path")
+                    ?: throw IllegalArgumentException("path required")
+                activeBackend.listDirectory(path)
+            }
+            "savesDirExists"      -> dispatch(result) {
+                activeBackend.savesDirExists(call.argument<String>("savesPath"))
+            }
+            "listSaves"           -> dispatch(result) {
+                activeBackend.listSaves(call.argument<String>("savesPath"))
+            }
+            "readSave"            -> dispatch(result) {
+                val slotId = call.argument<String>("slotId")
+                    ?: throw IllegalArgumentException("slotId required")
+                activeBackend.readSave(slotId, call.argument<String>("savesPath"))
+            }
+            "writeSave"           -> dispatch(result) {
+                val slotId = call.argument<String>("slotId")
+                    ?: throw IllegalArgumentException("slotId required")
+                val data = call.argument<ByteArray>("data")
+                    ?: throw IllegalArgumentException("data required")
+                activeBackend.writeSave(slotId, data, call.argument<String>("savesPath"))
+            }
+            "getSlotModifiedMs"   -> dispatch(result) {
+                val slotId = call.argument<String>("slotId")
+                    ?: throw IllegalArgumentException("slotId required")
+                activeBackend.getSlotModifiedMs(slotId, call.argument<String>("savesPath"))
+            }
+            else -> result.notImplemented()
         }
-        result.success(null)
     }
 
-    private fun getSlotModifiedMs(call: MethodCall, result: MethodChannel.Result) {
-        val slotId = call.argument<String>("slotId") ?: return result.error("NO_SLOT", "slotId required", null)
-        val slotDir = File(savesDir(call.argument<String>("savesPath")), slotId)
-        val mainFile = File(slotDir, slotId)
-        val infoFile = File(slotDir, "SaveGameInfo")
-        if (!mainFile.exists() || !infoFile.exists()) { result.success(0L); return }
-        result.success(maxOf(mainFile.lastModified(), infoFile.lastModified()))
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private fun dispatch(result: MethodChannel.Result, block: () -> Any?) {
+        Thread {
+            try {
+                val value = block()
+                Handler(Looper.getMainLooper()).post { result.success(value) }
+            } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    result.error("FILE_ACCESS_ERROR", e.message, null)
+                }
+            }
+        }.start()
     }
+
+    private fun loadMode(): FileAccessMode =
+        prefs.getString(PREFS_MODE_KEY, null)
+            ?.let { runCatching { FileAccessMode.valueOf(it) }.getOrNull() }
+            ?: FileAccessMode.MANAGE_STORAGE
+
+    private fun saveMode(mode: FileAccessMode) =
+        prefs.edit().putString(PREFS_MODE_KEY, mode.name).apply()
 }

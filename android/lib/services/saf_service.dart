@@ -74,4 +74,13 @@ class SafService {
         'getSlotModifiedMs', {'slotId': slotId, 'savesPath': savesPath});
     return ms ?? 0;
   }
+
+  Future<String> getFileAccessMode() async =>
+      await _channel.invokeMethod<String>('getFileAccessMode') ?? 'MANAGE_STORAGE';
+
+  Future<void> setFileAccessMode(String mode) async =>
+      await _channel.invokeMethod<void>('setFileAccessMode', {'mode': mode});
+
+  Future<bool> isShizukuAvailable() async =>
+      await _channel.invokeMethod<bool>('isShizukuAvailable') ?? false;
 }
