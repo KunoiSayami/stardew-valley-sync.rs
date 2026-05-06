@@ -3,7 +3,7 @@ members = ["common", "server"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 authors = ["KunoiSayami <i@leanhe.dev>"]
 license = "AGPL-3.0"

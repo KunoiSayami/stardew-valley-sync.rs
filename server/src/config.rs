@@ -9,6 +9,7 @@ struct FileConfig {
     pin: Option<String>,
     port: Option<u16>,
     saves_dir: Option<PathBuf>,
+    log_filter: Option<String>,
 }
 
 impl FileConfig {
@@ -39,6 +40,10 @@ struct Cli {
     /// Path to the Stardew Valley Saves directory (auto-detected if omitted)
     #[arg(long)]
     saves_dir: Option<PathBuf>,
+
+    /// Write logs to stdout instead of the default log file
+    #[arg(long, default_value_t = false)]
+    log_stdout: bool,
 }
 
 /// Resolved configuration (all fields guaranteed to be present).
@@ -47,6 +52,8 @@ pub struct Config {
     pub pin: String,
     pub port: u16,
     pub saves_dir: Option<PathBuf>,
+    pub log_filter: Option<String>,
+    pub log_stdout: bool,
 }
 
 impl Config {
@@ -79,6 +86,8 @@ impl Config {
                 pin,
                 port: cli.port.or(file.port).unwrap_or(24742),
                 saves_dir: cli.saves_dir.or(file.saves_dir),
+                log_filter: file.log_filter,
+                log_stdout: cli.log_stdout,
             },
             config_path,
         ))

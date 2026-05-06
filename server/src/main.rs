@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -7,6 +9,7 @@ use axum::{
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auth;
@@ -29,12 +32,11 @@ const MDNS_INSTANCE: &str = "StardewSync";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let (cfg, config_path) = Config::load()?;
+
+    // Hold the guard for the process lifetime so the non-blocking writer is not dropped.
+    let _log_guard = init_logging(&cfg);
+
     match &config_path {
         Some(p) => info!("Config file: {}", p.display()),
         None => info!(
@@ -120,6 +122,38 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received, waiting for in-flight requests…");
+}
+
+fn init_logging(cfg: &Config) -> Option<WorkerGuard> {
+    let filter = cfg
+        .log_filter
+        .as_deref()
+        .map(EnvFilter::new)
+        .unwrap_or_else(|| EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()));
+
+    if cfg.log_stdout {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+        return None;
+    }
+
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("stardew-sync-server");
+
+    // tracing-appender creates the directory if needed
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "server.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
+        .init();
+
+    eprintln!("Logging to {}", log_dir.join("server.log.<date>").display());
+    Some(guard)
 }
 
 fn advertise_mdns(port: u16) -> anyhow::Result<()> {
