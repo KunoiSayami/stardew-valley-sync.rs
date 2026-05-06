@@ -461,6 +461,18 @@ class _SavesPathDialogState extends State<_SavesPathDialog> {
     }
   }
 
+  Future<void> _useModLauncher() async {
+    final path = await widget.saf.getModLauncherSavesPath();
+    if (!mounted) return;
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Mod launcher not installed')),
+      );
+    } else {
+      widget.controller.text = path;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -472,6 +484,12 @@ class _SavesPathDialogState extends State<_SavesPathDialog> {
           Text(
             'Default: ${widget.defaultPath}',
             style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _useModLauncher,
+            icon: const Icon(Icons.extension_outlined, size: 18),
+            label: const Text('Use mod launcher path'),
           ),
           const SizedBox(height: 12),
           TextField(

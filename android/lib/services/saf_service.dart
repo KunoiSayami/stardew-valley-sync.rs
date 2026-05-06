@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 ///   readSave({slotId, savesPath?})          -> Uint8List
 ///   writeSave({slotId, data, savesPath?})   -> void
 ///   getSlotModifiedMs({slotId, savesPath?}) -> int
+///   getModLauncherSavesPath()               -> String  (error NOT_INSTALLED if absent)
 class SafService {
   static const _channel = MethodChannel('com.stardewsync/saf');
 
@@ -83,4 +84,14 @@ class SafService {
 
   Future<bool> isShizukuAvailable() async =>
       await _channel.invokeMethod<bool>('isShizukuAvailable') ?? false;
+
+  /// Returns the mod launcher saves path, or null if not installed.
+  Future<String?> getModLauncherSavesPath() async {
+    try {
+      return await _channel.invokeMethod<String>('getModLauncherSavesPath');
+    } on PlatformException catch (e) {
+      if (e.code == 'NOT_INSTALLED') return null;
+      rethrow;
+    }
+  }
 }

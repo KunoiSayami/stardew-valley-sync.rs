@@ -14,6 +14,11 @@
     <!-- Shizuku privileged file access (alternative to MANAGE_EXTERNAL_STORAGE) -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!-- Allow querying the mod launcher to detect its saves path -->
+    <queries>
+        <package android:name="abc.smapi.gameloader" />
+    </queries>
+
     <application
         android:label="Stardew Sync"
         android:name="${applicationName}"

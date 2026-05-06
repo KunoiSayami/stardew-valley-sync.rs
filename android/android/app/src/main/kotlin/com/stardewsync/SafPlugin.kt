@@ -3,6 +3,8 @@ package com.stardewsync
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -11,6 +13,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import java.io.File
 
 class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     ActivityAware, PluginRegistry.ActivityResultListener {
@@ -30,15 +33,19 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             else -> manageBackend
         }
 
+    private lateinit var appContext: Context
+
     companion object {
         private const val CHANNEL = "com.stardewsync/saf"
         private const val PREFS_NAME = "stardewsync_prefs"
         private const val PREFS_MODE_KEY = "file_access_mode"
+        private const val MOD_LAUNCHER_PACKAGE = "abc.smapi.gameloader"
     }
 
     // ── FlutterPlugin ────────────────────────────────────────────────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        appContext = binding.applicationContext
         prefs = binding.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         currentMode = loadMode()
         channel = MethodChannel(binding.binaryMessenger, CHANNEL)
@@ -85,6 +92,21 @@ class SafPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 result.success(null)
             }
             "isShizukuAvailable" -> result.success(shizukuBackend.isShizukuAvailable())
+            "getModLauncherSavesPath" -> {
+                val installed = runCatching {
+                    appContext.packageManager.getPackageInfo(MOD_LAUNCHER_PACKAGE, 0)
+                    true
+                }.getOrDefault(false)
+                if (!installed) {
+                    result.error("NOT_INSTALLED", "Mod launcher not installed", null)
+                } else {
+                    val path = File(
+                        Environment.getExternalStorageDirectory(),
+                        "Android/data/$MOD_LAUNCHER_PACKAGE/files/Saves"
+                    ).absolutePath
+                    result.success(path)
+                }
+            }
             "checkAndRequestPermission" -> {
                 if (pendingDartResult != null) {
                     result.error("IN_PROGRESS", "Permission request already in progress", null)
