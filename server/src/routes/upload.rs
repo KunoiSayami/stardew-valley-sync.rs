@@ -62,7 +62,7 @@ pub async fn handler_with_conflict_check(
     let zip_bytes = body.to_vec();
 
     let server_last_modified_ms = tokio::task::spawn_blocking(move || {
-        saves::extract_and_write_zip(&saves_dir_clone, &slot_id_clone, &zip_bytes)
+        saves::extract_and_write_zip(&saves_dir_clone, &slot_id_clone, &zip_bytes, client_ms)
     })
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;

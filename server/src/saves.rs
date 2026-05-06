@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+
 use anyhow::{Context, anyhow};
 use common::SaveSlotInfo;
 use regex::Regex;
@@ -125,10 +126,14 @@ pub fn build_zip(slot_dir: PathBuf, slot_id: String) -> anyhow::Result<Vec<u8>> 
 
 /// Creates a timestamped backup of an existing slot dir, then writes a new slot
 /// from the ZIP bytes. Returns the mtime of the newly written slot (ms).
+///
+/// If `client_ms` is `Some`, the extracted files' mtimes are set to that
+/// timestamp so the server preserves the original save timestamp.
 pub fn extract_and_write_zip(
     saves_dir: &Path,
     slot_id: &str,
     zip_bytes: &[u8],
+    client_ms: Option<i64>,
 ) -> anyhow::Result<i64> {
     let slot_dir = saves_dir.join(slot_id);
 
@@ -180,6 +185,16 @@ pub fn extract_and_write_zip(
     fs::rename(&tmp_slot, &final_dir)
         .with_context(|| format!("moving temp slot to {}", final_dir.display()))?;
     // Let TempDir clean up the (now empty) wrapper dir on drop.
+
+    if let Some(ms) = client_ms {
+        let ft = filetime::FileTime::from_unix_time(ms / 1000, ((ms % 1000) * 1_000_000) as u32);
+        let main_file = final_dir.join(slot_id);
+        let info_file = final_dir.join("SaveGameInfo");
+        filetime::set_file_mtime(&main_file, ft)
+            .with_context(|| format!("setting mtime on {}", main_file.display()))?;
+        filetime::set_file_mtime(&info_file, ft)
+            .with_context(|| format!("setting mtime on {}", info_file.display()))?;
+    }
 
     get_slot_mtime(&final_dir, slot_id)
 }
