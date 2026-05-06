@@ -37,7 +37,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   bool _shizukuSuggestionDismissed = false;
   String? _savesPath; // null = use default
   List<SaveSlot> _serverSlots = [];
-  Set<String> _localSlotIds = {};
+  Map<String, int> _localSlots = {};
   bool _dirMissing = false;
   bool _loading = false;
 
@@ -185,7 +185,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
         setState(() {
           _serverSlots = serverSlots;
           _dirMissing = !dirExists;
-          _localSlotIds = {for (final s in localSlots) s.slotId};
+          _localSlots = {for (final s in localSlots) s.slotId: s.lastModifiedMs};
         });
         // Permission granted but dir still inaccessible — offer Shizuku.
         if (_hasPermission &&
@@ -392,8 +392,15 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                       return ListTile(
                         leading: const Icon(Icons.save),
                         title: Text(slot.displayName),
-                        subtitle: Text(
-                            '${slot.formattedSize}  •  ${_fmtDate(slot.lastModified)}'),
+                        subtitle: Builder(builder: (context) {
+                          final localMs = _localSlots[slot.slotId];
+                          final localStr = localMs != null
+                              ? _fmtDate(DateTime.fromMillisecondsSinceEpoch(localMs))
+                              : 'no local';
+                          return Text(
+                            '${slot.formattedSize}  •  server: ${_fmtDate(slot.lastModified)}  •  local: $localStr',
+                          );
+                        }),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -404,10 +411,10 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                             ),
                             IconButton(
                               icon: const Icon(Icons.upload),
-                              tooltip: _localSlotIds.contains(slot.slotId)
+                              tooltip: _localSlots.containsKey(slot.slotId)
                                   ? 'Push from Android to server'
                                   : 'No local save found',
-                              onPressed: _localSlotIds.contains(slot.slotId)
+                              onPressed: _localSlots.containsKey(slot.slotId)
                                   ? () => _push(slot)
                                   : null,
                             ),
