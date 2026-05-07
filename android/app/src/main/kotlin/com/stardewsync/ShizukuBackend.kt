@@ -144,7 +144,7 @@ class ShizukuBackend : FileAccessBackend {
         return buf.toByteArray()
     }
 
-    override fun writeSave(slotId: String, data: ByteArray, savesPath: String?) {
+    override fun writeSave(slotId: String, data: ByteArray, savesPath: String?, lastModifiedMs: Long?) {
         val root = savesRoot(savesPath)
         val slotDir = "$root/$slotId"
         val bakDir = "$root/$slotId.bak.${System.currentTimeMillis()}"
@@ -159,11 +159,14 @@ class ShizukuBackend : FileAccessBackend {
                 val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
                 val destPath = "$slotDir/${entry.name}"
                 val tmpFile = "/data/local/tmp/stardewsync_${System.currentTimeMillis()}.b64"
-                // Write base64 via stdin to avoid arg-length limits, then decode
                 val writeProc = newProcess(arrayOf("sh", "-c", "cat > '$tmpFile'"))
                 writeProc.outputStream.use { it.write(b64.toByteArray()) }
                 writeProc.waitFor()
                 shell("base64 -d '$tmpFile' > '${destPath.esc()}' && rm '$tmpFile'")
+                if (lastModifiedMs != null) {
+                    val sec = lastModifiedMs / 1000
+                    shell("touch -t $(date -d @$sec '+%Y%m%d%H%M.%S') '${destPath.esc()}'")
+                }
                 zip.closeEntry()
                 entry = zip.nextEntry
             }

@@ -16,17 +16,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -55,6 +58,7 @@ import com.stardewsync.data.api.ApiClient
 import com.stardewsync.data.prefs.AppPreferences
 import com.stardewsync.service.FileAccessService
 import com.stardewsync.ui.navigation.AppNavGraph
+import com.stardewsync.ui.sync.SyncDirection
 import java.text.DateFormat
 import java.util.Date
 
@@ -171,13 +175,16 @@ fun SyncScreen(
                 )
             }
 
-            state.savesPath?.let { path ->
-                SuggestionChip(
-                    onClick = { showPathDialog = true },
-                    label = { Text(path, style = MaterialTheme.typography.labelSmall) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
+            SuggestionChip(
+                onClick = { showPathDialog = true },
+                label = {
+                    Text(
+                        state.savesPath ?: fileAccess.getDefaultSavesPath(),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                },
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
 
             if (state.isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
@@ -186,20 +193,21 @@ fun SyncScreen(
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(state.serverSlots) { slot ->
                     val localMs = state.localSlots[slot.slotId]
+                    val slotErr = state.slotErrors[slot.slotId] ?: emptySet()
                     ListItem(
                         headlineContent = { Text(slot.displayName) },
                         supportingContent = {
                             Column {
                                 Text("Server: ${fmt.format(Date(slot.lastModifiedMs))} · ${slot.formattedSize}")
-                                if (localMs != null)
-                                    Text("Local:  ${fmt.format(Date(localMs))}")
+                                Text(if (localMs != null) "Local:  ${fmt.format(Date(localMs))}" else "Local:  —")
                             }
                         },
                         trailingContent = {
                             Row {
                                 IconButton(
                                     onClick = { vm.pull(slot) },
-                                    enabled = !state.isLoading && state.hasPermission,
+                                    enabled = !state.isLoading && state.hasPermission &&
+                                        SyncDirection.PULL !in slotErr,
                                 ) {
                                     Icon(
                                         Icons.Default.CloudDownload,
@@ -207,17 +215,16 @@ fun SyncScreen(
                                         modifier = Modifier.size(20.dp),
                                     )
                                 }
-                                if (localMs != null) {
-                                    IconButton(
-                                        onClick = { vm.push(slot) },
-                                        enabled = !state.isLoading && state.hasPermission,
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CloudUpload,
-                                            contentDescription = "Upload",
-                                            modifier = Modifier.size(20.dp),
-                                        )
-                                    }
+                                IconButton(
+                                    onClick = { vm.push(slot) },
+                                    enabled = localMs != null && !state.isLoading &&
+                                        state.hasPermission && SyncDirection.PUSH !in slotErr,
+                                ) {
+                                    Icon(
+                                        Icons.Default.CloudUpload,
+                                        contentDescription = "Upload",
+                                        modifier = Modifier.size(20.dp),
+                                    )
                                 }
                             }
                         },
@@ -233,6 +240,27 @@ fun SyncScreen(
             info = conflict,
             onOverwrite = { vm.resolveConflict(overwrite = true) },
             onCancel = { vm.dismissConflict() },
+        )
+    }
+
+    // Shizuku suggestion dialog
+    if (state.showShizukuSuggestion) {
+        AlertDialog(
+            onDismissRequest = { vm.dismissShizukuSuggestion() },
+            title = { Text("Use Shizuku instead?") },
+            text = {
+                Text(
+                    "\"All Files Access\" is granted but the saves directory wasn't found. " +
+                        "Shizuku is available and can access save files directly. " +
+                        "Would you like to switch to Shizuku mode?"
+                )
+            },
+            confirmButton = {
+                FilledTonalButton(onClick = { vm.switchToShizuku() }) { Text("Switch to Shizuku") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissShizukuSuggestion() }) { Text("No, stay") }
+            },
         )
     }
 
@@ -252,6 +280,21 @@ fun SyncScreen(
                         singleLine = true,
                     )
                     Spacer(Modifier.height(8.dp))
+                    val modPath = fileAccess.getModLauncherSavesPath()
+                    if (modPath != null) {
+                        OutlinedButton(
+                            onClick = { pathInput = modPath },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(
+                                Icons.Default.Extension,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("Use mod launcher path")
+                        }
+                    }
                     TextButton(onClick = {
                         showPathDialog = false
                         navController.navigate(

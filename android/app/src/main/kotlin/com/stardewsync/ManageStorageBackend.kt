@@ -101,7 +101,7 @@ class ManageStorageBackend : FileAccessBackend {
         return buf.toByteArray()
     }
 
-    override fun writeSave(slotId: String, data: ByteArray, savesPath: String?) {
+    override fun writeSave(slotId: String, data: ByteArray, savesPath: String?, lastModifiedMs: Long?) {
         val savesRoot = savesDir(savesPath)
         savesRoot.mkdirs()
 
@@ -112,7 +112,9 @@ class ManageStorageBackend : FileAccessBackend {
         ZipInputStream(ByteArrayInputStream(data)).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
-                File(newDir, entry.name).outputStream().use { zip.copyTo(it) }
+                val outFile = File(newDir, entry.name)
+                outFile.outputStream().use { zip.copyTo(it) }
+                if (lastModifiedMs != null) outFile.setLastModified(lastModifiedMs)
                 zip.closeEntry()
                 entry = zip.nextEntry
             }

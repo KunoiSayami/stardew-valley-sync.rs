@@ -11,8 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -60,97 +60,94 @@ fun ServerConnectScreen(
     Scaffold(
         topBar = { TopAppBar(title = { Text("Connect to PC Server") }) }
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
-            item {
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Discovered servers", style = MaterialTheme.typography.titleSmall)
-                    IconButton(onClick = { vm.scan() }, enabled = !state.isScanning) {
-                        if (state.isScanning)
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else
-                            Icon(Icons.Default.Refresh, contentDescription = "Scan")
-                    }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Discovered servers", style = MaterialTheme.typography.titleSmall)
+                IconButton(onClick = { vm.scan() }, enabled = !state.isScanning) {
+                    if (state.isScanning)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else
+                        Icon(Icons.Default.Refresh, contentDescription = "Scan")
                 }
             }
 
             if (state.discovered.isEmpty() && !state.isScanning) {
-                item { Text("No servers found", style = MaterialTheme.typography.bodyMedium) }
+                Text("No servers found", style = MaterialTheme.typography.bodyMedium)
             }
 
-            items(state.discovered) { server ->
+            state.discovered.forEach { server ->
                 ListItem(
                     headlineContent = { Text(server.toString()) },
                     modifier = Modifier.clickable { vm.selectDiscovered(server) },
                 )
             }
 
-            item { HorizontalDivider() }
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
 
-            item {
-                Text("Manual entry", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.ip,
-                    onValueChange = vm::updateIp,
-                    label = { Text("IP address") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.port,
-                    onValueChange = vm::updatePort,
-                    label = { Text("Port") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = state.pin,
-                    onValueChange = vm::updatePin,
-                    label = { Text("PIN") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                )
-                if (state.error != null) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(state.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-                Spacer(Modifier.height(12.dp))
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                    Button(
-                        onClick = {
-                            vm.connect(state.ip, state.port, state.pin) { ip, port, pin ->
-                                navController.navigate(AppNavGraph.syncRoute(ip, port, pin)) {
-                                    popUpTo(AppNavGraph.ROUTE_CONNECT) { inclusive = true }
-                                }
-                            }
-                        },
-                        enabled = !state.isConnecting,
-                    ) {
-                        if (state.isConnecting)
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                        else
-                            Text("Connect")
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
+            Text("Manual entry", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.ip,
+                onValueChange = vm::updateIp,
+                label = { Text("IP address") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.port,
+                onValueChange = vm::updatePort,
+                label = { Text("Port") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = state.pin,
+                onValueChange = vm::updatePin,
+                label = { Text("PIN") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            )
+            if (state.error != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(state.error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                Button(
+                    onClick = {
+                        vm.connect(state.ip, state.port, state.pin) { ip, port, pin ->
+                            navController.navigate(AppNavGraph.syncRoute(ip, port, pin)) {
+                                popUpTo(AppNavGraph.ROUTE_CONNECT) { inclusive = true }
+                            }
+                        }
+                    },
+                    enabled = !state.isConnecting,
+                ) {
+                    if (state.isConnecting)
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    else
+                        Text("Connect")
+                }
+            }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

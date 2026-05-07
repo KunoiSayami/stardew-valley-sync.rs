@@ -2,6 +2,7 @@ package com.stardewsync.ui.sync
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.stardewsync.FileAccessMode
 import com.stardewsync.data.api.ApiClient
 import com.stardewsync.data.api.ConflictException
 import com.stardewsync.data.model.SaveSlotInfo
@@ -31,6 +32,8 @@ data class SyncUiState(
     val isLoading: Boolean = false,
     val statusMessage: String? = null,
     val pendingConflict: ConflictInfo? = null,
+    val showShizukuSuggestion: Boolean = false,
+    val slotErrors: Map<String, Set<SyncDirection>> = emptyMap(),
 )
 
 class SyncViewModel(
@@ -41,6 +44,8 @@ class SyncViewModel(
 
     private val _uiState = MutableStateFlow(SyncUiState())
     val uiState: StateFlow<SyncUiState> = _uiState
+
+    private var shizukuSuggestionDismissed = false
 
     fun onResume() = refresh()
 
@@ -58,6 +63,12 @@ class SyncViewModel(
                     }
                 } else emptyMap()
 
+                val suggestShizuku = hasPerm &&
+                    !dirExists &&
+                    prefs.fileAccessMode == FileAccessMode.MANAGE_STORAGE &&
+                    !shizukuSuggestionDismissed &&
+                    fileAccess.isShizukuAvailable()
+
                 _uiState.update {
                     it.copy(
                         serverSlots = serverSlots,
@@ -66,6 +77,8 @@ class SyncViewModel(
                         savesPath = savesPath,
                         dirMissing = hasPerm && !dirExists,
                         isLoading = false,
+                        showShizukuSuggestion = suggestShizuku,
+                        slotErrors = emptyMap(),
                     )
                 }
             } catch (e: Exception) {
@@ -97,11 +110,15 @@ class SyncViewModel(
                     }
                     return@launch
                 }
-                fileAccess.writeSave(slot.slotId, zipBytes, prefs.savesPath)
+                fileAccess.writeSave(slot.slotId, zipBytes, prefs.savesPath, serverMs)
                 _uiState.update { it.copy(isLoading = false, statusMessage = "Downloaded ${slot.displayName}") }
                 refresh()
             } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, statusMessage = "Download failed: ${e.message}") }
+                _uiState.update {
+                    val errors = it.slotErrors.toMutableMap()
+                    errors[slot.slotId] = (errors[slot.slotId] ?: emptySet()) + SyncDirection.PULL
+                    it.copy(isLoading = false, statusMessage = "Download failed: ${e.message}", slotErrors = errors)
+                }
             }
         }
     }
@@ -129,7 +146,11 @@ class SyncViewModel(
                     )
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, statusMessage = "Upload failed: ${e.message}") }
+                _uiState.update {
+                    val errors = it.slotErrors.toMutableMap()
+                    errors[slot.slotId] = (errors[slot.slotId] ?: emptySet()) + SyncDirection.PUSH
+                    it.copy(isLoading = false, statusMessage = "Upload failed: ${e.message}", slotErrors = errors)
+                }
             }
         }
     }
@@ -144,8 +165,11 @@ class SyncViewModel(
             try {
                 when (conflict.direction) {
                     SyncDirection.PULL -> {
-                        val zipBytes = conflict.zipBytes ?: api.downloadSave(conflict.slotId).first
-                        fileAccess.writeSave(conflict.slotId, zipBytes, prefs.savesPath)
+                        val (zipBytes, serverMs) = if (conflict.zipBytes != null)
+                            conflict.zipBytes to conflict.serverMs
+                        else
+                            api.downloadSave(conflict.slotId)
+                        fileAccess.writeSave(conflict.slotId, zipBytes, prefs.savesPath, serverMs)
                         _uiState.update { it.copy(statusMessage = "Downloaded ${conflict.slotId}") }
                     }
                     SyncDirection.PUSH -> {
@@ -178,6 +202,24 @@ class SyncViewModel(
     }
 
     fun clearStatus() = _uiState.update { it.copy(statusMessage = null) }
+
+    fun dismissShizukuSuggestion() {
+        shizukuSuggestionDismissed = true
+        _uiState.update { it.copy(showShizukuSuggestion = false) }
+    }
+
+    fun switchToShizuku() {
+        shizukuSuggestionDismissed = true
+        _uiState.update { it.copy(showShizukuSuggestion = false) }
+        prefs.fileAccessMode = FileAccessMode.SHIZUKU
+        viewModelScope.launch {
+            val granted = fileAccess.requestPermission()
+            if (!granted) {
+                _uiState.update { it.copy(statusMessage = "Shizuku permission not granted") }
+            }
+            refresh()
+        }
+    }
 
     fun disconnect(onDisconnected: () -> Unit) {
         prefs.clearServerCredentials()

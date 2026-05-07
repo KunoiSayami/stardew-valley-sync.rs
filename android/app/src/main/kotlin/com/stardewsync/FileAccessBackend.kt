@@ -10,6 +10,6 @@ interface FileAccessBackend {
     fun savesDirExists(savesPath: String?): Boolean
     fun listSaves(savesPath: String?): List<Map<String, Any>>
     fun readSave(slotId: String, savesPath: String?): ByteArray
-    fun writeSave(slotId: String, data: ByteArray, savesPath: String?)
+    fun writeSave(slotId: String, data: ByteArray, savesPath: String?, lastModifiedMs: Long? = null)
     fun getSlotModifiedMs(slotId: String, savesPath: String?): Long
 }
