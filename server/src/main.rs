@@ -35,7 +35,10 @@ const MDNS_INSTANCE: &str = "StardewSync";
 // ── Windows entry point ────────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
-    let (cfg, config_path) = Config::load()?;
+    let (cfg, config_path) = Config::load().unwrap_or_else(|e| {
+        show_error(&format!("{e}"));
+        std::process::exit(1);
+    });
     // Hold the guard for the process lifetime so the non-blocking writer is not dropped.
     let _log_guard = init_logging(&cfg);
 
@@ -61,6 +64,19 @@ fn main() -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let rt = tokio::runtime::Runtime::new()?;
     let server_handle = rt.spawn(run_server(cfg, shutdown_rx));
+
+    // Ctrl+C sends shutdown and posts WM_QUIT so the tray message pump exits.
+    let ctrlc_tx = shutdown_tx.clone();
+    rt.spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            info!("Ctrl+C received, requesting shutdown");
+            let _ = ctrlc_tx.send(true);
+            // Wake the Win32 message pump so tray::run() can return.
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
+            }
+        }
+    });
 
     // Blocks the main thread in the Win32 message pump until Exit is clicked.
     tray::run(port, shutdown_tx)?;
@@ -136,19 +152,37 @@ async fn run_server(
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     info!("Server running at http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            loop {
-                if shutdown_rx.changed().await.is_err() {
-                    break;
-                }
-                if *shutdown_rx.borrow() {
-                    break;
-                }
+
+    // Clone for the timeout race — both watch the same channel.
+    let mut timeout_rx = shutdown_rx.clone();
+
+    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+        loop {
+            if shutdown_rx.changed().await.is_err() {
+                break;
             }
-            info!("Shutdown signal received, waiting for in-flight requests…");
-        })
-        .await?;
+            if *shutdown_rx.borrow() {
+                break;
+            }
+        }
+        info!("Shutdown signal received, waiting for in-flight requests…");
+    });
+
+    // Race graceful drain against a 5-second hard timeout so idle keep-alive
+    // connections can't prevent the process from exiting.
+    tokio::select! {
+        result = serve => { result?; }
+        _ = async {
+            // Wait for shutdown signal first, then start the timeout.
+            loop {
+                if timeout_rx.changed().await.is_err() { break; }
+                if *timeout_rx.borrow() { break; }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        } => {
+            info!("Shutdown timeout elapsed, forcing exit");
+        }
+    }
 
     Ok(())
 }
@@ -222,6 +256,30 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received, waiting for in-flight requests…");
+}
+
+#[cfg(target_os = "windows")]
+fn show_error(msg: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let title: Vec<u16> = OsStr::new("Stardew Sync Server")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let text: Vec<u16> = OsStr::new(msg)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }
 
 fn init_logging(cfg: &Config) -> Option<WorkerGuard> {
