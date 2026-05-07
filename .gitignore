@@ -5,8 +5,6 @@ config.toml
 # Flutter / Android Studio
 android/.dart_tool/
 android/build/
-android/.flutter-plugins
-android/.flutter-plugins-dependencies
 android/.packages
 android/.gradle/
 android/.kotlin/
@@ -18,7 +16,7 @@ android/.idea/
 android/*.iml
 android/**/*.hprof
 android/key.properties
-android/lib/debug_config.dart
+android/gradle/gradle-daemon-jvm.properties
 *.class
 
 # IDE
