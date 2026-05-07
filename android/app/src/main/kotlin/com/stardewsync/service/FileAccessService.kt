@@ -8,6 +8,7 @@ import com.stardewsync.ManageStorageBackend
 import com.stardewsync.ShizukuBackend
 import com.stardewsync.data.prefs.AppPreferences
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -42,7 +43,7 @@ class FileAccessService(
         activeBackend.hasPermission()
     }
 
-    suspend fun requestPermission(): Boolean = suspendCoroutine { cont ->
+    suspend fun requestPermission(): Boolean = suspendCancellableCoroutine { cont ->
         activeBackend.requestPermission { granted -> cont.resume(granted) }
     }
 

@@ -1,6 +1,7 @@
 package com.stardewsync
 
 import android.content.pm.PackageManager
+import android.os.Environment
 import android.util.Base64
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -16,8 +17,8 @@ class ShizukuBackend : FileAccessBackend {
     companion object {
         private const val SHIZUKU_REQ_CODE = 42003
         private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
-        private val DEFAULT_PATH =
-            "/sdcard/Android/data/$STARDEW_PACKAGE/files/Saves"
+        private val DEFAULT_PATH = Environment.getExternalStorageDirectory().path +
+            "/Android/data/$STARDEW_PACKAGE/files/Saves"
     }
 
     private var pendingCallback: ((Boolean) -> Unit)? = null
