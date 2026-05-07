@@ -52,23 +52,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-
-      - name: Create debug config
-        run: cp android/lib/debug_config.dart.example android/lib/debug_config.dart
-
-      - name: Flutter pub get
-        working-directory: android
-        run: flutter pub get
-
       - name: Build APK
         working-directory: android
-        run: flutter build apk --release
+        run: ./gradlew :app:assembleRelease
 
       - uses: actions/upload-artifact@v7
         with:
           name: stardew-sync-android.apk
-          path: android/build/app/outputs/flutter-apk/app-release.apk
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
 

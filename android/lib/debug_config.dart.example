@@ -1,5 +1,0 @@
-// Copy this file to debug_config.dart and fill in your local values.
-// debug_config.dart is gitignored — never commit it.
-const String kDebugServerIp = '10.0.2.2';
-const String kDebugServerPort = '24742';
-const String kDebugServerPin = '0000';

@@ -5,7 +5,7 @@ Sync Stardew Valley saves between your PC and Android device over your local Wi-
 ## How it works
 
 - The **PC server** (Rust) watches your save folder and exposes a small HTTP API.
-- The **Android app** (Flutter) auto-discovers the server via mDNS (same mechanism as LocalSend) and lets you push or pull any save slot.
+- The **Android app** (native Kotlin + Jetpack Compose) auto-discovers the server via mDNS (same mechanism as LocalSend) and lets you push or pull any save slot.
 - Both sides create timestamped backups before overwriting anything.
 - If the target save is newer than the source, you are prompted before proceeding.
 
@@ -58,18 +58,19 @@ This tool is designed for **LAN use only**. There is no TLS. The PIN prevents ra
 
 ### Prerequisites
 
-- [Flutter SDK](https://flutter.dev/docs/get-started/install) installed
-- [Android Studio](https://developer.android.com/studio) with the Flutter plugin
+- [Android Studio](https://developer.android.com/studio) (or any IDE with Android SDK)
+- JDK 17+
 - Android device running Android 11 or newer (API 30+)
 
 ### Build & install
 
-1. Open the `android/` folder in Android Studio.
-2. Let Gradle and Flutter sync finish.
-3. Run on a connected device or build an APK:
-   - **Android Studio**: Run → Run 'main.dart'
-   - **CLI**: `flutter build apk --release` (from `android/`)
-4. Sideload the APK from `android/build/app/outputs/flutter-apk/app-release.apk` if not installing directly.
+- **Android Studio**: Open `android/` as the project root, let Gradle sync finish, then Run on a connected device.
+- **CLI**:
+  ```sh
+  cd android
+  ./gradlew :app:assembleRelease
+  # APK: app/build/outputs/apk/release/app-release-unsigned.apk
+  ```
 
 ### First launch
 
