@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import com.stardewsync.data.prefs.AppPreferences
 import com.stardewsync.service.FileAccessService
 import com.stardewsync.ui.navigation.AppNavGraph
@@ -13,11 +14,17 @@ class MainActivity : ComponentActivity() {
 
     lateinit var fileAccessService: FileAccessService
 
+    private val manageStorageLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        fileAccessService.manageBackend.onPermissionResult()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = AppPreferences(applicationContext)
         fileAccessService = FileAccessService(applicationContext, prefs)
-        fileAccessService.onActivityCreated(this)
+        fileAccessService.onActivityCreated(manageStorageLauncher)
 
         setContent {
             StardewSyncTheme {
@@ -29,11 +36,5 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         fileAccessService.onActivityDestroyed()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        fileAccessService.manageBackend.handleActivityResult(requestCode, resultCode, data)
     }
 }

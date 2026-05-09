@@ -1,8 +1,9 @@
 package com.stardewsync.service
 
-import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.os.Environment
+import androidx.activity.result.ActivityResultLauncher
 import com.stardewsync.FileAccessBackend
 import com.stardewsync.FileAccessMode
 import com.stardewsync.ManageStorageBackend
@@ -13,7 +14,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 class FileAccessService(
     private val context: Context,
@@ -33,13 +33,13 @@ class FileAccessService(
     private val activeBackend: FileAccessBackend
         get() = if (currentMode == FileAccessMode.SHIZUKU) shizukuBackend else manageBackend
 
-    fun onActivityCreated(activity: Activity) {
-        manageBackend.activity = activity
+    fun onActivityCreated(launcher: ActivityResultLauncher<Intent>) {
+        manageBackend.launcher = launcher
         shizukuBackend.registerListeners()
     }
 
     fun onActivityDestroyed() {
-        manageBackend.activity = null
+        manageBackend.launcher = null
         shizukuBackend.unregisterListeners()
     }
 

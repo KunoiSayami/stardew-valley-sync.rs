@@ -1,11 +1,11 @@
 package com.stardewsync
 
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.activity.result.ActivityResultLauncher
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -16,11 +16,10 @@ import androidx.core.net.toUri
 
 class ManageStorageBackend : FileAccessBackend {
 
-    var activity: Activity? = null
+    var launcher: ActivityResultLauncher<Intent>? = null
     private var pendingCallback: ((Boolean) -> Unit)? = null
 
     companion object {
-        const val REQUEST_CODE = 42002
         private const val STARDEW_PACKAGE = "com.chucklefish.stardewvalley"
 
         fun defaultPath(): String =
@@ -38,20 +37,18 @@ class ManageStorageBackend : FileAccessBackend {
 
     override fun requestPermission(onResult: (Boolean) -> Unit) {
         if (hasPermission()) { onResult(true); return }
-        val act = activity ?: run { onResult(false); return }
+        val l = launcher ?: run { onResult(false); return }
         pendingCallback = onResult
         val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-            data = "package:${act.packageName}".toUri()
+            data = "package:com.stardewsync".toUri()
         }
-        act.startActivityForResult(intent, REQUEST_CODE)
+        l.launch(intent)
     }
 
-    fun handleActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
-        if (requestCode != REQUEST_CODE) return false
-        val cb = pendingCallback ?: return false
+    fun onPermissionResult() {
+        val cb = pendingCallback ?: return
         pendingCallback = null
         cb(hasPermission())
-        return true
     }
 
     override fun getDefaultSavesPath(): String = defaultPath()

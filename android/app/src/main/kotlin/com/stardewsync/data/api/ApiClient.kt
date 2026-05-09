@@ -24,7 +24,7 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
         val request = Request.Builder().url("$baseUrl/health").get().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Health check failed: ${response.code}")
-            JSONObject(response.body!!.string())
+            JSONObject(response.body.string())
         }
     }
 
@@ -36,7 +36,7 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
             .build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("List saves failed: ${response.code}")
-            val array = JSONObject(response.body!!.string()).getJSONArray("slots")
+            val array = JSONObject(response.body.string()).getJSONArray("slots")
             (0 until array.length()).map { SaveSlotInfo.fromJson(array.getJSONObject(it)) }
         }
     }
@@ -51,7 +51,7 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Download failed: ${response.code}")
             val ts = response.header("x-slot-last-modified-ms")?.toLongOrNull() ?: 0L
-            Pair(response.body!!.bytes(), ts)
+            Pair(response.body.bytes(), ts)
         }
     }
 
@@ -71,7 +71,7 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
             .build()
         client.newCall(request).execute().use { response ->
             if (response.code == 409) {
-                val json = JSONObject(response.body!!.string())
+                val json = JSONObject(response.body.string())
                 throw ConflictException(
                     serverLastModifiedMs = json.getLong("server_last_modified_ms"),
                     clientLastModifiedMs = json.optLong("client_last_modified_ms", clientLastModifiedMs),
