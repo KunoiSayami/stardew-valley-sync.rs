@@ -15,6 +15,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 mod auth;
 mod config;
 mod error;
+mod federation;
 mod routes;
 mod saves;
 #[cfg(target_os = "windows")]
@@ -22,9 +23,11 @@ mod tray;
 
 use auth::PinAuthLayer;
 use config::Config;
+use federation::auth::FederationAuthLayer;
 use routes::{
-    AppState, delete::handler as delete_handler, download::handler as download_handler,
-    health::handler as health_handler, saves_list::handler as saves_list_handler,
+    AppState, LivePeer, delete::handler as delete_handler, download::handler as download_handler,
+    federation_push::handler as federation_push_handler, health::handler as health_handler,
+    saves_list::handler as saves_list_handler,
     upload::handler_with_conflict_check as upload_handler,
 };
 
@@ -121,11 +124,29 @@ async fn run_server(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let saves_dir = cfg.saves_dir_resolved();
+    let peers = Arc::new(tokio::sync::RwLock::new(Vec::<LivePeer>::new()));
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
     let state = AppState {
         saves_dir: Arc::new(saves_dir),
         pin: Arc::new(cfg.pin.clone()),
         version: VERSION,
+        federation_token: Arc::new(cfg.federation_token.clone()),
+        peers: peers.clone(),
+        http_client,
+        own_port: cfg.port,
     };
+
+    if cfg.federation_token.is_some() {
+        let static_peers = cfg.static_peers.clone();
+        let peers_clone = peers.clone();
+        let own_port = cfg.port;
+        tokio::spawn(async move {
+            federation::peer_discovery::run_peer_discovery(static_peers, peers_clone, own_port)
+                .await;
+        });
+    }
 
     let protected = Router::new()
         .route("/api/v1/saves", get(saves_list_handler))
@@ -137,9 +158,22 @@ async fn run_server(
 
     let app = Router::new()
         .route("/health", get(health_handler))
-        .merge(protected)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .merge(protected);
+
+    let app = if let Some(token) = cfg.federation_token.clone() {
+        let fed = Router::new()
+            .route(
+                "/api/v1/federation/push/{slot_id}",
+                post(federation_push_handler),
+            )
+            .layer(FederationAuthLayer::new(token))
+            .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
+        app.merge(fed)
+    } else {
+        app
+    };
+
+    let app = app.layer(TraceLayer::new_for_http()).with_state(state);
 
     let mdns_port = cfg.port;
     tokio::spawn(async move {
@@ -193,11 +227,29 @@ async fn axum_serve_with_ctrlc(
     _shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let saves_dir = cfg.saves_dir_resolved();
+    let peers = Arc::new(tokio::sync::RwLock::new(Vec::<LivePeer>::new()));
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
     let state = AppState {
         saves_dir: Arc::new(saves_dir),
         pin: Arc::new(cfg.pin.clone()),
         version: VERSION,
+        federation_token: Arc::new(cfg.federation_token.clone()),
+        peers: peers.clone(),
+        http_client,
+        own_port: cfg.port,
     };
+
+    if cfg.federation_token.is_some() {
+        let static_peers = cfg.static_peers.clone();
+        let peers_clone = peers.clone();
+        let own_port = cfg.port;
+        tokio::spawn(async move {
+            federation::peer_discovery::run_peer_discovery(static_peers, peers_clone, own_port)
+                .await;
+        });
+    }
 
     let protected = Router::new()
         .route("/api/v1/saves", get(saves_list_handler))
@@ -209,9 +261,22 @@ async fn axum_serve_with_ctrlc(
 
     let app = Router::new()
         .route("/health", get(health_handler))
-        .merge(protected)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .merge(protected);
+
+    let app = if let Some(token) = cfg.federation_token.clone() {
+        let fed = Router::new()
+            .route(
+                "/api/v1/federation/push/{slot_id}",
+                post(federation_push_handler),
+            )
+            .layer(FederationAuthLayer::new(token))
+            .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
+        app.merge(fed)
+    } else {
+        app
+    };
+
+    let app = app.layer(TraceLayer::new_for_http()).with_state(state);
 
     let mdns_port = cfg.port;
     tokio::spawn(async move {

@@ -67,6 +67,14 @@ pub async fn handler_with_conflict_check(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;
 
+    crate::federation::replicator::spawn_replication(
+        slot_id.clone(),
+        state.saves_dir.clone(),
+        state,
+        client_ms,
+        None,
+    );
+
     let status = if is_new {
         StatusCode::CREATED
     } else {

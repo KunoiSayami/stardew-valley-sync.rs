@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use clap::Parser;
 use serde::Deserialize;
 
+/// A peer server in the federation.
+#[derive(Deserialize, Clone, Debug)]
+pub struct PeerConfig {
+    pub url: String,
+}
+
 /// Fields that can be supplied via config file (all optional).
 #[derive(Deserialize, Default)]
 struct FileConfig {
@@ -10,6 +16,9 @@ struct FileConfig {
     port: Option<u16>,
     saves_dir: Option<PathBuf>,
     log_filter: Option<String>,
+    federation_token: Option<String>,
+    #[serde(default)]
+    peers: Vec<PeerConfig>,
 }
 
 impl FileConfig {
@@ -54,6 +63,8 @@ pub struct Config {
     pub saves_dir: Option<PathBuf>,
     pub log_filter: Option<String>,
     pub log_stdout: bool,
+    pub federation_token: Option<String>,
+    pub static_peers: Vec<PeerConfig>,
 }
 
 impl Config {
@@ -88,6 +99,8 @@ impl Config {
                 saves_dir: cli.saves_dir.or(file.saves_dir),
                 log_filter: file.log_filter,
                 log_stdout: cli.log_stdout,
+                federation_token: file.federation_token,
+                static_peers: file.peers,
             },
             config_path,
         ))
