@@ -66,7 +66,8 @@ fn main() -> anyhow::Result<()> {
     let port = cfg.port;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let rt = tokio::runtime::Runtime::new()?;
-    let server_handle = rt.spawn(run_server(cfg, shutdown_rx));
+    let state = rt.block_on(build_app_state(&cfg))?;
+    let server_handle = rt.spawn(run_server(cfg, shutdown_rx, state.clone()));
 
     // Ctrl+C sends shutdown and posts WM_QUIT so the tray message pump exits.
     let ctrlc_tx = shutdown_tx.clone();
@@ -82,7 +83,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // Blocks the main thread in the Win32 message pump until Exit is clicked.
-    tray::run(port, shutdown_tx)?;
+    tray::run(port, shutdown_tx, state)?;
     rt.block_on(server_handle)??;
     info!("Server shut down gracefully");
     Ok(())
@@ -119,10 +120,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_server(
-    cfg: Config,
-    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) -> anyhow::Result<()> {
+async fn build_app_state(cfg: &Config) -> anyhow::Result<AppState> {
     let saves_dir = cfg.saves_dir_resolved();
     let peers = Arc::new(tokio::sync::RwLock::new(Vec::<LivePeer>::new()));
     let http_client = reqwest::Client::builder()
@@ -140,14 +138,20 @@ async fn run_server(
 
     if cfg.federation_token.is_some() {
         let static_peers = cfg.static_peers.clone();
-        let peers_clone = peers.clone();
         let own_port = cfg.port;
         tokio::spawn(async move {
-            federation::peer_discovery::run_peer_discovery(static_peers, peers_clone, own_port)
-                .await;
+            federation::peer_discovery::run_peer_discovery(static_peers, peers, own_port).await;
         });
     }
 
+    Ok(state)
+}
+
+async fn run_server(
+    cfg: Config,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    state: AppState,
+) -> anyhow::Result<()> {
     let protected = Router::new()
         .route("/api/v1/saves", get(saves_list_handler))
         .route("/api/v1/saves/{slot_id}/download", get(download_handler))

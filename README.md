@@ -48,6 +48,51 @@ stardew-sync-server --pin 123456 --port 24742 --saves-dir "C:\custom\path\Saves"
 
 The server advertises itself on the LAN via mDNS (`_stardewsync._tcp.local.`) so the Android app can find it automatically.
 
+### Federation (multi-server sync)
+
+Multiple server instances can form a federation so that a save uploaded to any one server is automatically replicated to all others. This is useful for keeping multiple PCs in sync without involving the Android app.
+
+Add the following to `config.toml`:
+
+```toml
+pin = "123456"
+
+# Shared secret used between servers — different from the client PIN.
+federation_token = "some-long-random-secret"
+
+# List every other server in the federation.
+[[peers]]
+url = "http://192.168.1.20:24742"
+
+[[peers]]
+url = "http://192.168.1.30:24742"
+```
+
+**How it works:**
+- When a client uploads a save, the receiving server immediately pushes the ZIP to all configured peers via `POST /api/v1/federation/push/{slot_id}`.
+- Each peer re-replicates onward to *its own* peer list, excluding the sender, so the update fans out across the full mesh.
+- Servers on the same LAN are also discovered automatically via mDNS — no static config needed for local peers.
+- Replication is fire-and-forget: failures are logged but never surfaced to the uploading client.
+- Federation is **opt-in**: omitting `federation_token` from the config disables it entirely.
+
+### Windows system tray
+
+On Windows the server runs as a system tray icon. Right-clicking it reveals:
+
+| Menu item | Action |
+|-----------|--------|
+| *StardewSync — port XXXX* | Status (read-only) |
+| **Start on Boot** | Toggle Windows autostart |
+| **Add Federated Server…** | Open a dialog to add a peer at runtime |
+| **Exit** | Shut the server down |
+
+**Add Federated Server…** opens a dialog with two fields:
+
+- **Server address** — the URL of the peer (e.g. `http://192.168.1.20:24742`).
+- **Password (optional)** — the federation token for that peer. Defaults to this server's own `federation_token` when one is configured.
+
+Peers added this way take effect immediately (no restart needed) but are not written back to `config.toml`. Add them to the config file if you want them to survive a restart.
+
 ### Security
 
 This tool is designed for **LAN use only**. There is no TLS. The PIN prevents random devices on your network from accessing your saves. Do not expose the port to the internet.
