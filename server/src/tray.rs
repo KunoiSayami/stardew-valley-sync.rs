@@ -1,4 +1,4 @@
-use tokio::sync::watch;
+use tokio::sync::watch::{self, Receiver};
 use tracing::{info, warn};
 use tray_icon::{
     TrayIconBuilder,
@@ -319,8 +319,13 @@ unsafe fn show_add_peer_dialog(default_password: &str) -> Option<(String, String
 // ── Public entry point ─────────────────────────────────────────────────────
 
 /// Blocks the calling thread in a Win32 message pump.
-/// Returns when the user selects Exit from the tray menu.
-pub fn run(port: u16, shutdown_tx: watch::Sender<bool>, state: AppState) -> anyhow::Result<()> {
+/// Returns when the user selects Exit from the tray menu or a shutdown signal is received.
+pub fn run(
+    port: u16,
+    shutdown_tx: watch::Sender<bool>,
+    mut shutdown_rx: Receiver<bool>,
+    state: AppState,
+) -> anyhow::Result<()> {
     let status_item = MenuItem::new(format!("StardewSync \u{2014} port {port}"), false, None);
     let autostart_item = CheckMenuItem::new("Start on Boot", true, is_autostart_enabled(), None);
     let add_peer_item = MenuItem::new("Add Federated Server\u{2026}", true, None);
@@ -351,6 +356,12 @@ pub fn run(port: u16, shutdown_tx: watch::Sender<bool>, state: AppState) -> anyh
     unsafe {
         let mut msg = std::mem::zeroed::<MSG>();
         loop {
+            // Check if an external shutdown was requested (e.g. Ctrl+C).
+            if shutdown_rx.has_changed().unwrap_or(false) && *shutdown_rx.borrow_and_update() {
+                info!("Tray: shutdown signal received, exiting message pump");
+                return Ok(());
+            }
+
             while let Ok(event) = menu_channel.try_recv() {
                 if event.id == exit_id {
                     info!("Tray: Exit clicked, requesting shutdown");
@@ -367,14 +378,25 @@ pub fn run(port: u16, shutdown_tx: watch::Sender<bool>, state: AppState) -> anyh
                 }
             }
 
-            // GetMessageW blocks until a message arrives (returns 0 on WM_QUIT,
-            // -1 on error, positive otherwise).
-            let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
-            if ret == 0 || ret == -1 {
-                break;
+            // PeekMessageW with PM_REMOVE returns immediately; if no message is
+            // pending we yield briefly so the shutdown check above stays responsive
+            // without burning a full CPU core.
+            let ret = windows_sys::Win32::UI::WindowsAndMessaging::PeekMessageW(
+                &mut msg,
+                std::ptr::null_mut(),
+                0,
+                0,
+                windows_sys::Win32::UI::WindowsAndMessaging::PM_REMOVE,
+            );
+            if ret != 0 {
+                if msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
         }
     }
 

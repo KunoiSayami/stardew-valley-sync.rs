@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{future::Future, net::SocketAddr, sync::Arc};
 
 use axum::{
     Router,
@@ -35,17 +35,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MDNS_SERVICE_TYPE: &str = "_stardewsync._tcp.local.";
 const MDNS_INSTANCE: &str = "StardewSync";
 
-// ── Windows entry point ────────────────────────────────────────────────────
-#[cfg(target_os = "windows")]
-fn main() -> anyhow::Result<()> {
-    let (cfg, config_path) = Config::load().unwrap_or_else(|e| {
-        show_error(&format!("{e}"));
-        std::process::exit(1);
-    });
-    // Hold the guard for the process lifetime so the non-blocking writer is not dropped.
-    let _log_guard = init_logging(&cfg);
-
-    match &config_path {
+fn log_startup_info(cfg: &Config, config_path: &Option<std::path::PathBuf>) {
+    match config_path {
         Some(p) => info!("Config file: {}", p.display()),
         None => info!(
             "No config file found (default: {})",
@@ -62,30 +53,47 @@ fn main() -> anyhow::Result<()> {
     }
     info!("Saves directory: {}", saves_dir.display());
     info!("Listening on port {}", cfg.port);
+}
+
+// ── Windows entry point ────────────────────────────────────────────────────
+#[cfg(target_os = "windows")]
+fn main() -> anyhow::Result<()> {
+    let (cfg, config_path) = Config::load().unwrap_or_else(|e| {
+        show_error(&format!("{e}"));
+        std::process::exit(1);
+    });
+    let _log_guard = init_logging(&cfg);
+    log_startup_info(&cfg, &config_path);
 
     let port = cfg.port;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let rt = tokio::runtime::Runtime::new()?;
     let state = rt.block_on(build_app_state(&cfg))?;
-    let server_handle = rt.spawn(run_server(cfg, shutdown_rx, state.clone()));
 
-    // Ctrl+C sends shutdown and posts WM_QUIT so the tray message pump exits.
     let ctrlc_tx = shutdown_tx.clone();
     rt.spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             info!("Ctrl+C received, requesting shutdown");
             let _ = ctrlc_tx.send(true);
-            // Wake the Win32 message pump so tray::run() can return.
-            unsafe {
-                windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
-            }
         }
     });
 
-    // Blocks the main thread in the Win32 message pump until Exit is clicked.
-    tray::run(port, shutdown_tx, state)?;
+    let mut watch_rx = shutdown_rx.clone();
+    let server_handle = rt.spawn(run_server(cfg, state.clone(), async move {
+        loop {
+            if watch_rx.changed().await.is_err() {
+                break;
+            }
+            if *watch_rx.borrow() {
+                break;
+            }
+        }
+        info!("Shutdown signal received, waiting for in-flight requests…");
+    }));
+
+    // Blocks the main thread in the Win32 message pump until Exit is clicked or shutdown fires.
+    tray::run(port, shutdown_tx, shutdown_rx, state)?;
     rt.block_on(server_handle)??;
-    info!("Server shut down gracefully");
     Ok(())
 }
 
@@ -95,28 +103,10 @@ fn main() -> anyhow::Result<()> {
 async fn main() -> anyhow::Result<()> {
     let (cfg, config_path) = Config::load()?;
     let _log_guard = init_logging(&cfg);
+    log_startup_info(&cfg, &config_path);
 
-    match &config_path {
-        Some(p) => info!("Config file: {}", p.display()),
-        None => info!(
-            "No config file found (default: {})",
-            config::default_config_path().display()
-        ),
-    }
-    let saves_dir = cfg.saves_dir_resolved();
-    if !saves_dir.exists() {
-        tracing::warn!(
-            "Saves directory does not exist: {}. \
-             Create it or pass --saves-dir.",
-            saves_dir.display()
-        );
-    }
-    info!("Saves directory: {}", saves_dir.display());
-    info!("Listening on port {}", cfg.port);
-
-    let (_, shutdown_rx) = tokio::sync::watch::channel(false);
-    axum_serve_with_ctrlc(cfg, shutdown_rx).await?;
-    info!("Server shut down gracefully");
+    let state = build_app_state(&cfg).await?;
+    run_server(cfg, state, shutdown_signal()).await?;
     Ok(())
 }
 
@@ -147,11 +137,7 @@ async fn build_app_state(cfg: &Config) -> anyhow::Result<AppState> {
     Ok(state)
 }
 
-async fn run_server(
-    cfg: Config,
-    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    state: AppState,
-) -> anyhow::Result<()> {
+fn build_router(cfg: &Config, state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/v1/saves", get(saves_list_handler))
         .route("/api/v1/saves/{slot_id}/download", get(download_handler))
@@ -177,7 +163,15 @@ async fn run_server(
         app
     };
 
-    let app = app.layer(TraceLayer::new_for_http()).with_state(state);
+    app.layer(TraceLayer::new_for_http()).with_state(state)
+}
+
+async fn run_server(
+    cfg: Config,
+    state: AppState,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = build_router(&cfg, state);
 
     let mdns_port = cfg.port;
     tokio::spawn(async move {
@@ -191,27 +185,19 @@ async fn run_server(
     info!("Server running at http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Clone for the timeout race — both watch the same channel.
-    let mut timeout_rx = shutdown_rx.clone();
-
-    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
-        loop {
-            if shutdown_rx.changed().await.is_err() {
-                break;
-            }
-            if *shutdown_rx.borrow() {
-                break;
-            }
-        }
-        info!("Shutdown signal received, waiting for in-flight requests…");
-    });
+    // Wrap shutdown so we can also start the hard-timeout race after it fires.
+    let (timeout_tx, mut timeout_rx) = tokio::sync::watch::channel(false);
+    let shutdown_wrapped = async move {
+        shutdown.await;
+        let _ = timeout_tx.send(true);
+    };
 
     // Race graceful drain against a 5-second hard timeout so idle keep-alive
     // connections can't prevent the process from exiting.
+    let serve = axum::serve(listener, app).with_graceful_shutdown(shutdown_wrapped);
     tokio::select! {
         result = serve => { result?; }
         _ = async {
-            // Wait for shutdown signal first, then start the timeout.
             loop {
                 if timeout_rx.changed().await.is_err() { break; }
                 if *timeout_rx.borrow() { break; }
@@ -221,81 +207,6 @@ async fn run_server(
             info!("Shutdown timeout elapsed, forcing exit");
         }
     }
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-async fn axum_serve_with_ctrlc(
-    cfg: Config,
-    _shutdown_rx: tokio::sync::watch::Receiver<bool>,
-) -> anyhow::Result<()> {
-    let saves_dir = cfg.saves_dir_resolved();
-    let peers = Arc::new(tokio::sync::RwLock::new(Vec::<LivePeer>::new()));
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let state = AppState {
-        saves_dir: Arc::new(saves_dir),
-        pin: Arc::new(cfg.pin.clone()),
-        version: VERSION,
-        federation_token: Arc::new(cfg.federation_token.clone()),
-        peers: peers.clone(),
-        http_client,
-        own_port: cfg.port,
-    };
-
-    if cfg.federation_token.is_some() {
-        let static_peers = cfg.static_peers.clone();
-        let peers_clone = peers.clone();
-        let own_port = cfg.port;
-        tokio::spawn(async move {
-            federation::peer_discovery::run_peer_discovery(static_peers, peers_clone, own_port)
-                .await;
-        });
-    }
-
-    let protected = Router::new()
-        .route("/api/v1/saves", get(saves_list_handler))
-        .route("/api/v1/saves/{slot_id}/download", get(download_handler))
-        .route("/api/v1/saves/{slot_id}/upload", post(upload_handler))
-        .route("/api/v1/saves/{slot_id}", delete(delete_handler))
-        .layer(PinAuthLayer::new(cfg.pin.clone()))
-        .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
-
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .merge(protected);
-
-    let app = if let Some(token) = cfg.federation_token.clone() {
-        let fed = Router::new()
-            .route(
-                "/api/v1/federation/push/{slot_id}",
-                post(federation_push_handler),
-            )
-            .layer(FederationAuthLayer::new(token))
-            .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
-        app.merge(fed)
-    } else {
-        app
-    };
-
-    let app = app.layer(TraceLayer::new_for_http()).with_state(state);
-
-    let mdns_port = cfg.port;
-    tokio::spawn(async move {
-        match advertise_mdns(mdns_port) {
-            Ok(_) => info!("mDNS service advertised on port {mdns_port}"),
-            Err(e) => tracing::warn!("mDNS advertisement failed: {e}"),
-        }
-    });
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
-    info!("Server running at http://{addr}");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
 
     Ok(())
 }
