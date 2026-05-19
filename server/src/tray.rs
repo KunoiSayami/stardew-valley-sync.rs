@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use tokio::sync::watch::{self, Receiver};
 use tracing::{info, warn};
 use tray_icon::{
@@ -316,6 +318,221 @@ unsafe fn show_add_peer_dialog(default_password: &str) -> Option<(String, String
     state.result
 }
 
+// ── Backup-retention dialog ────────────────────────────────────────────────
+
+struct RetentionDialogState {
+    current_days: i64,
+    result: Option<i64>,
+}
+
+const RETENTION_DIALOG_CLASS: &str = "StardewSyncRetention";
+const IDC_DAYS: u16 = 201;
+
+unsafe extern "system" fn retention_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            unsafe {
+                let cs = &*(lparam as *const CREATESTRUCTW);
+                let state_ptr = cs.lpCreateParams as *mut RetentionDialogState;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
+
+                let label_style = (WS_CHILD | WS_VISIBLE) as u32;
+                let edit_style =
+                    (WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP) as u32 | ES_AUTOHSCROLL as u32;
+                let btn_style = (WS_CHILD | WS_VISIBLE | WS_TABSTOP) as u32;
+
+                let cls_static = wide("STATIC");
+                let cls_edit = wide("EDIT");
+                let cls_button = wide("BUTTON");
+
+                CreateWindowExW(
+                    0,
+                    cls_static.as_ptr(),
+                    wide("Delete backups older than (days):").as_ptr(),
+                    label_style,
+                    10,
+                    14,
+                    200,
+                    16,
+                    hwnd,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                CreateWindowExW(
+                    0,
+                    cls_static.as_ptr(),
+                    wide("(0 = disabled)").as_ptr(),
+                    label_style,
+                    10,
+                    34,
+                    200,
+                    16,
+                    hwnd,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+
+                let current_str = (*state_ptr).current_days.to_string();
+                CreateWindowExW(
+                    0,
+                    cls_edit.as_ptr(),
+                    wide(&current_str).as_ptr(),
+                    edit_style,
+                    215,
+                    10,
+                    60,
+                    22,
+                    hwnd,
+                    IDC_DAYS as _,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+
+                CreateWindowExW(
+                    0,
+                    cls_button.as_ptr(),
+                    wide("OK").as_ptr(),
+                    btn_style | BS_DEFPUSHBUTTON as u32,
+                    130,
+                    64,
+                    70,
+                    26,
+                    hwnd,
+                    IDC_OK as _,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                CreateWindowExW(
+                    0,
+                    cls_button.as_ptr(),
+                    wide("Cancel").as_ptr(),
+                    btn_style | BS_PUSHBUTTON as u32,
+                    210,
+                    64,
+                    70,
+                    26,
+                    hwnd,
+                    IDC_CANCEL as _,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+            }
+            0
+        }
+
+        WM_COMMAND => {
+            let ctrl_id = (wparam & 0xFFFF) as u16;
+            if ctrl_id == IDC_OK {
+                unsafe {
+                    let state_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RetentionDialogState;
+                    let text = read_edit(hwnd, IDC_DAYS);
+                    match text.parse::<u64>() {
+                        Ok(n) => {
+                            (*state_ptr).result = Some(n as i64);
+                            DestroyWindow(hwnd);
+                        }
+                        Err(_) => {
+                            let title = wide("Stardew Sync Server");
+                            let msg_text = wide("Please enter a non-negative whole number.");
+                            MessageBoxW(
+                                hwnd,
+                                msg_text.as_ptr(),
+                                title.as_ptr(),
+                                MB_OK | MB_ICONERROR,
+                            );
+                        }
+                    }
+                }
+            } else if ctrl_id == IDC_CANCEL {
+                unsafe { DestroyWindow(hwnd) };
+            }
+            0
+        }
+
+        WM_CLOSE => {
+            unsafe { DestroyWindow(hwnd) };
+            0
+        }
+        WM_DESTROY => {
+            unsafe { PostQuitMessage(0) };
+            0
+        }
+        WM_CTLCOLORDLG => unsafe { GetStockObject(WHITE_BRUSH as i32) as LRESULT },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe fn ensure_retention_class_registered() {
+    let class_name = wide(RETENTION_DIALOG_CLASS);
+    let mut wc: WNDCLASSEXW = unsafe { std::mem::zeroed() };
+    wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
+    wc.lpfnWndProc = Some(retention_wnd_proc);
+    wc.hCursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) };
+    wc.hbrBackground = (COLOR_BTNFACE + 1) as _;
+    wc.lpszClassName = class_name.as_ptr();
+    unsafe { RegisterClassExW(&wc) };
+}
+
+/// Show the "Set Backup Retention" dialog. Returns `Some(days)` where -1 means disabled.
+unsafe fn show_retention_dialog(current_days: i64) -> Option<i64> {
+    unsafe { ensure_retention_class_registered() };
+
+    let mut state = RetentionDialogState {
+        current_days,
+        result: None,
+    };
+
+    let title = wide("Set Backup Retention");
+    let class = wide(RETENTION_DIALOG_CLASS);
+
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            class.as_ptr(),
+            title.as_ptr(),
+            (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | WS_GROUP) as u32,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            310,
+            130,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut state as *mut _ as _,
+        )
+    };
+
+    if hwnd.is_null() {
+        return None;
+    }
+
+    unsafe { ShowWindow(hwnd, SW_SHOW as i32) };
+
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    loop {
+        let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
+        if ret == 0 || ret == -1 {
+            break;
+        }
+        if unsafe { IsDialogMessageW(hwnd, &msg) } == 0 {
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    state.result
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────
 
 /// Blocks the calling thread in a Win32 message pump.
@@ -329,6 +546,7 @@ pub fn run(
     let status_item = MenuItem::new(format!("StardewSync \u{2014} port {port}"), false, None);
     let autostart_item = CheckMenuItem::new("Start on Boot", true, is_autostart_enabled(), None);
     let add_peer_item = MenuItem::new("Add Federated Server\u{2026}", true, None);
+    let retention_item = MenuItem::new("Set Backup Retention\u{2026}", true, None);
     let exit_item = MenuItem::new("Exit", true, None);
 
     let menu = Menu::new();
@@ -336,6 +554,7 @@ pub fn run(
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&autostart_item)?;
     menu.append(&add_peer_item)?;
+    menu.append(&retention_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&exit_item)?;
 
@@ -347,6 +566,7 @@ pub fn run(
 
     let autostart_id = autostart_item.id().clone();
     let add_peer_id = add_peer_item.id().clone();
+    let retention_id = retention_item.id().clone();
     let exit_id = exit_item.id().clone();
     let menu_channel = MenuEvent::receiver();
 
@@ -375,6 +595,18 @@ pub fn run(
                     if let Some((url, password)) = show_add_peer_dialog(&default_pw) {
                         add_peer_to_state(&state, url, password);
                     }
+                } else if event.id == retention_id {
+                    let current = state.backup_max_age_days.load(Ordering::Relaxed);
+                    if let Some(new_days) = show_retention_dialog(current) {
+                        state.backup_max_age_days.store(new_days, Ordering::Relaxed);
+                        persist_retention(&state, new_days);
+                        let label = if new_days == 0 {
+                            "disabled".to_string()
+                        } else {
+                            format!("{new_days} day(s)")
+                        };
+                        info!("Tray: backup retention set to {label}");
+                    }
                 }
             }
 
@@ -401,6 +633,42 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Rewrites `backup_max_age_days` in the config file in-place.
+/// days == 0 removes the key (disabled); days > 0 sets it.
+fn persist_retention(state: &AppState, days: i64) {
+    let Some(ref path) = *state.config_path else {
+        warn!("Tray: no config file path known; backup retention not persisted");
+        return;
+    };
+
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+
+    let mut found = false;
+    let mut out_lines: Vec<String> = content
+        .lines()
+        .filter_map(|l| {
+            if l.trim_start().starts_with("backup_max_age_days") {
+                found = true;
+                if days > 0 {
+                    Some(format!("backup_max_age_days = {days}"))
+                } else {
+                    None // remove the line (disabled)
+                }
+            } else {
+                Some(l.to_string())
+            }
+        })
+        .collect();
+
+    if !found && days > 0 {
+        out_lines.push(format!("backup_max_age_days = {days}"));
+    }
+
+    if let Err(e) = std::fs::write(path, out_lines.join("\n")) {
+        warn!("Tray: failed to persist backup retention: {e}");
+    }
 }
 
 fn add_peer_to_state(state: &AppState, url: String, _password: String) {

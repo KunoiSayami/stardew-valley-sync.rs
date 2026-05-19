@@ -67,10 +67,13 @@ pub async fn handler_with_conflict_check(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;
 
-    if let Some(days) = state.backup_max_age_days {
+    let backup_days = state
+        .backup_max_age_days
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if backup_days > 0 {
         let purge_dir = saves_dir.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = saves::purge_old_backups(&purge_dir, days) {
+            if let Err(e) = saves::purge_old_backups(&purge_dir, backup_days as u64) {
                 tracing::warn!("Backup purge failed: {e}");
             }
         });

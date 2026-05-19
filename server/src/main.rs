@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{future::Future, net::SocketAddr, sync::Arc};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    sync::{Arc, atomic::AtomicI64},
+};
 
 use axum::{
     Router,
@@ -72,7 +76,7 @@ fn main() -> anyhow::Result<()> {
     let port = cfg.port;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let rt = tokio::runtime::Runtime::new()?;
-    let state = rt.block_on(build_app_state(&cfg))?;
+    let state = rt.block_on(build_app_state(&cfg, config_path.clone()))?;
 
     let ctrlc_tx = shutdown_tx.clone();
     rt.spawn(async move {
@@ -109,17 +113,21 @@ async fn main() -> anyhow::Result<()> {
     let _log_guard = init_logging(&cfg);
     log_startup_info(&cfg, &config_path);
 
-    let state = build_app_state(&cfg).await?;
+    let state = build_app_state(&cfg, config_path).await?;
     run_server(cfg, state, shutdown_signal()).await?;
     Ok(())
 }
 
-async fn build_app_state(cfg: &Config) -> anyhow::Result<AppState> {
+async fn build_app_state(
+    cfg: &Config,
+    config_path: Option<std::path::PathBuf>,
+) -> anyhow::Result<AppState> {
     let saves_dir = cfg.saves_dir_resolved();
     let peers = Arc::new(tokio::sync::RwLock::new(Vec::<LivePeer>::new()));
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
+    let backup_days_raw: i64 = cfg.backup_max_age_days.map(|d| d as i64).unwrap_or(0);
     let state = AppState {
         saves_dir: Arc::new(saves_dir),
         pin: Arc::new(cfg.pin.clone()),
@@ -128,7 +136,8 @@ async fn build_app_state(cfg: &Config) -> anyhow::Result<AppState> {
         peers: peers.clone(),
         http_client,
         own_port: cfg.port,
-        backup_max_age_days: cfg.backup_max_age_days,
+        backup_max_age_days: Arc::new(AtomicI64::new(backup_days_raw)),
+        config_path: Arc::new(config_path),
     };
 
     if cfg.federation_token.is_some() {

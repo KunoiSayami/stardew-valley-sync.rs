@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicI64},
+};
 
 use tokio::sync::RwLock;
 
@@ -31,5 +34,8 @@ pub struct AppState {
     pub peers: Arc<RwLock<Vec<LivePeer>>>,
     pub http_client: reqwest::Client,
     pub own_port: u16,
-    pub backup_max_age_days: Option<u64>,
+    /// 0 = disabled; >0 = delete backups older than this many days.
+    pub backup_max_age_days: Arc<AtomicI64>,
+    /// Path to the loaded config file, used to persist runtime changes.
+    pub config_path: Arc<Option<PathBuf>>,
 }
