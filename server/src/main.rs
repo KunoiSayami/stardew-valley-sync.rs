@@ -25,8 +25,12 @@ use auth::PinAuthLayer;
 use config::Config;
 use federation::auth::FederationAuthLayer;
 use routes::{
-    AppState, LivePeer, delete::handler as delete_handler, download::handler as download_handler,
-    federation_push::handler as federation_push_handler, health::handler as health_handler,
+    AppState, LivePeer,
+    backups::{delete_handler as backups_delete_handler, list_handler as backups_list_handler},
+    delete::handler as delete_handler,
+    download::handler as download_handler,
+    federation_push::handler as federation_push_handler,
+    health::handler as health_handler,
     saves_list::handler as saves_list_handler,
     upload::handler_with_conflict_check as upload_handler,
 };
@@ -124,6 +128,7 @@ async fn build_app_state(cfg: &Config) -> anyhow::Result<AppState> {
         peers: peers.clone(),
         http_client,
         own_port: cfg.port,
+        backup_max_age_days: cfg.backup_max_age_days,
     };
 
     if cfg.federation_token.is_some() {
@@ -143,6 +148,8 @@ fn build_router(cfg: &Config, state: AppState) -> Router {
         .route("/api/v1/saves/{slot_id}/download", get(download_handler))
         .route("/api/v1/saves/{slot_id}/upload", post(upload_handler))
         .route("/api/v1/saves/{slot_id}", delete(delete_handler))
+        .route("/api/v1/backups", get(backups_list_handler))
+        .route("/api/v1/backups/{name}", delete(backups_delete_handler))
         .layer(PinAuthLayer::new(cfg.pin.clone()))
         .layer(RequestBodyLimitLayer::new(50 * 1024 * 1024));
 

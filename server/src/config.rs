@@ -19,6 +19,7 @@ struct FileConfig {
     federation_token: Option<String>,
     #[serde(default)]
     peers: Vec<PeerConfig>,
+    backup_max_age_days: Option<u64>,
 }
 
 impl FileConfig {
@@ -65,6 +66,7 @@ pub struct Config {
     pub log_stdout: bool,
     pub federation_token: Option<String>,
     pub static_peers: Vec<PeerConfig>,
+    pub backup_max_age_days: Option<u64>,
 }
 
 impl Config {
@@ -101,6 +103,7 @@ impl Config {
                 log_stdout: cli.log_stdout,
                 federation_token: file.federation_token,
                 static_peers: file.peers,
+                backup_max_age_days: file.backup_max_age_days,
             },
             config_path,
         ))

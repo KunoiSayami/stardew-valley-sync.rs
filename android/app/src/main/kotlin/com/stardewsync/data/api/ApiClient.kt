@@ -91,4 +91,37 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
             if (!response.isSuccessful) throw IOException("Delete failed: ${response.code}")
         }
     }
+
+    suspend fun listServerBackups(): List<BackupInfo> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$baseUrl/api/v1/backups")
+            .withPin()
+            .get()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("List backups failed: ${response.code}")
+            val array = org.json.JSONObject(response.body.string()).getJSONArray("backups")
+            (0 until array.length()).map {
+                val obj = array.getJSONObject(it)
+                BackupInfo(
+                    name = obj.getString("name"),
+                    slotId = obj.getString("slot_id"),
+                    timestampMs = obj.getLong("timestamp_ms"),
+                )
+            }
+        }
+    }
+
+    suspend fun deleteServerBackup(name: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$baseUrl/api/v1/backups/$name")
+            .withPin()
+            .delete()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Delete backup failed: ${response.code}")
+        }
+    }
 }
+
+data class BackupInfo(val name: String, val slotId: String, val timestampMs: Long)

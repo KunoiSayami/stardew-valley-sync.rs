@@ -90,4 +90,12 @@ class FileAccessService(
     suspend fun getSlotModifiedMs(slotId: String, savesPath: String?): Long = withContext(Dispatchers.IO) {
         activeBackend.getSlotModifiedMs(slotId, savesPath)
     }
+
+    suspend fun listBackups(savesPath: String?): List<Map<String, Any>> = withContext(Dispatchers.IO) {
+        activeBackend.listBackups(savesPath)
+    }
+
+    suspend fun deleteBackup(name: String, savesPath: String?) = withContext(Dispatchers.IO) {
+        activeBackend.deleteBackup(name, savesPath)
+    }
 }

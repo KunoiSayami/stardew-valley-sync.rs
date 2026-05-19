@@ -187,4 +187,27 @@ class ShizukuBackend : FileAccessBackend {
         val b = lines[1].toLongOrNull() ?: return 0L
         return maxOf(a, b) * 1000L
     }
+
+    override fun listBackups(savesPath: String?): List<Map<String, Any>> {
+        val root = savesRoot(savesPath)
+        val bakRe = Regex("""^(.+)\.bak\.(\d+)$""")
+        val lines = shell("ls -1 '${root.esc()}' 2>/dev/null").lines()
+            .map { it.trim() }.filter { it.isNotEmpty() }
+        return lines.mapNotNull { name ->
+            val m = bakRe.matchEntire(name) ?: return@mapNotNull null
+            val path = "$root/$name"
+            val isDir = shell("[ -d '${path.esc()}' ] && echo yes || echo no").trim() == "yes"
+            if (!isDir) return@mapNotNull null
+            mapOf(
+                "name" to name,
+                "slotId" to m.groupValues[1],
+                "timestampMs" to m.groupValues[2].toLong(),
+            )
+        }.sortedByDescending { it["timestampMs"] as Long }
+    }
+
+    override fun deleteBackup(name: String, savesPath: String?) {
+        val path = "${savesRoot(savesPath)}/$name"
+        shell("rm -rf '${path.esc()}'")
+    }
 }

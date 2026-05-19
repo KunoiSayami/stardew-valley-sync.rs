@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use tokio::sync::RwLock;
 
+pub mod backups;
 pub mod delete;
 pub mod download;
 pub mod federation_push;
@@ -30,4 +31,5 @@ pub struct AppState {
     pub peers: Arc<RwLock<Vec<LivePeer>>>,
     pub http_client: reqwest::Client,
     pub own_port: u16,
+    pub backup_max_age_days: Option<u64>,
 }

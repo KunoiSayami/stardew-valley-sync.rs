@@ -44,3 +44,20 @@ pub struct ApiErrorResponse {
 pub struct DeleteResponse {
     pub deleted: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupInfo {
+    pub name: String,
+    pub slot_id: String,
+    pub timestamp_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BackupListResponse {
+    pub backups: Vec<BackupInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeleteBackupResponse {
+    pub deleted: String,
+}

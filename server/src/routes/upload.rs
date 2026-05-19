@@ -67,6 +67,15 @@ pub async fn handler_with_conflict_check(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;
 
+    if let Some(days) = state.backup_max_age_days {
+        let purge_dir = saves_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = saves::purge_old_backups(&purge_dir, days) {
+                tracing::warn!("Backup purge failed: {e}");
+            }
+        });
+    }
+
     crate::federation::replicator::spawn_replication(
         slot_id.clone(),
         state.saves_dir.clone(),

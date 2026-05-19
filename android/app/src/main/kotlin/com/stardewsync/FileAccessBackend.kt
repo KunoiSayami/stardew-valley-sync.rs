@@ -12,4 +12,6 @@ interface FileAccessBackend {
     fun readSave(slotId: String, savesPath: String?): ByteArray
     fun writeSave(slotId: String, data: ByteArray, savesPath: String?, lastModifiedMs: Long? = null)
     fun getSlotModifiedMs(slotId: String, savesPath: String?): Long
+    fun listBackups(savesPath: String?): List<Map<String, Any>>
+    fun deleteBackup(name: String, savesPath: String?)
 }

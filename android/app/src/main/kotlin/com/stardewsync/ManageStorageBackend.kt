@@ -125,4 +125,23 @@ class ManageStorageBackend : FileAccessBackend {
         if (!mainFile.exists() || !infoFile.exists()) return 0L
         return maxOf(mainFile.lastModified(), infoFile.lastModified())
     }
+
+    override fun listBackups(savesPath: String?): List<Map<String, Any>> {
+        val bakRe = Regex("""^(.+)\.bak\.(\d+)$""")
+        return (savesDir(savesPath).listFiles() ?: emptyArray())
+            .mapNotNull { f ->
+                if (!f.isDirectory) return@mapNotNull null
+                val m = bakRe.matchEntire(f.name) ?: return@mapNotNull null
+                mapOf(
+                    "name" to f.name,
+                    "slotId" to m.groupValues[1],
+                    "timestampMs" to m.groupValues[2].toLong(),
+                )
+            }
+            .sortedByDescending { it["timestampMs"] as Long }
+    }
+
+    override fun deleteBackup(name: String, savesPath: String?) {
+        File(savesDir(savesPath), name).deleteRecursively()
+    }
 }

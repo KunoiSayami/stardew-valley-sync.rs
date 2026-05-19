@@ -6,11 +6,17 @@ use std::{
 };
 
 use anyhow::{Context, anyhow};
-use common::SaveSlotInfo;
+use common::{BackupInfo, SaveSlotInfo};
 use regex::Regex;
 use tempfile::TempDir;
+use tracing::info;
 
 static SLOT_ID_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+static BACKUP_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+fn backup_regex() -> &'static Regex {
+    BACKUP_RE.get_or_init(|| Regex::new(r"^(.+)\.bak\.(\d+)$").unwrap())
+}
 
 pub fn slot_id_regex() -> &'static Regex {
     SLOT_ID_RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9_\-]{1,64}$").unwrap())
@@ -206,4 +212,67 @@ pub fn delete_slot(saves_dir: &Path, slot_id: &str) -> anyhow::Result<()> {
     }
     fs::remove_dir_all(&slot_dir)
         .with_context(|| format!("deleting slot dir: {}", slot_dir.display()))
+}
+
+/// Lists all backup directories in saves_dir, sorted newest-first.
+pub fn list_backups(saves_dir: &Path) -> anyhow::Result<Vec<BackupInfo>> {
+    let re = backup_regex();
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(saves_dir).context("reading saves directory")? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if let Some(caps) = re.captures(&name) {
+            let slot_id = caps[1].to_string();
+            let timestamp_ms: i64 = caps[2].parse().unwrap_or(0);
+            backups.push(BackupInfo {
+                name,
+                slot_id,
+                timestamp_ms,
+            });
+        }
+    }
+    backups.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+    Ok(backups)
+}
+
+/// Deletes a single backup directory by name.
+pub fn delete_backup(saves_dir: &Path, backup_name: &str) -> anyhow::Result<()> {
+    if !backup_regex().is_match(backup_name) {
+        return Err(anyhow!("invalid backup name: {backup_name}"));
+    }
+    let backup_dir = saves_dir.join(backup_name);
+    if !backup_dir.exists() {
+        return Err(anyhow!("backup not found: {backup_name}"));
+    }
+    fs::remove_dir_all(&backup_dir)
+        .with_context(|| format!("deleting backup dir: {}", backup_dir.display()))
+}
+
+/// Deletes all backups older than `max_age_days` days. Returns the count deleted.
+pub fn purge_old_backups(saves_dir: &Path, max_age_days: u64) -> anyhow::Result<usize> {
+    let cutoff_ms = system_time_to_ms(SystemTime::now()) - (max_age_days as i64) * 86_400_000;
+    let backups = list_backups(saves_dir)?;
+    let mut count = 0;
+    for backup in backups {
+        if backup.timestamp_ms < cutoff_ms {
+            let backup_dir = saves_dir.join(&backup.name);
+            match fs::remove_dir_all(&backup_dir) {
+                Ok(()) => {
+                    info!("Purged old backup: {}", backup.name);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to purge backup {}: {e}", backup.name);
+                }
+            }
+        }
+    }
+    Ok(count)
 }

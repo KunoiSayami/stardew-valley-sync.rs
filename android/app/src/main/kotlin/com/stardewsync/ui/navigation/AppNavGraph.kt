@@ -11,6 +11,7 @@ import com.stardewsync.data.api.ApiClient
 import com.stardewsync.data.prefs.AppPreferences
 import com.stardewsync.service.DiscoveryService
 import com.stardewsync.service.FileAccessService
+import com.stardewsync.ui.backup.BackupManagerScreen
 import com.stardewsync.ui.browser.DirectoryBrowserScreen
 import com.stardewsync.ui.connect.ServerConnectScreen
 import com.stardewsync.ui.fileaccess.FileAccessSettingsScreen
@@ -23,11 +24,15 @@ object AppNavGraph {
     const val ROUTE_SYNC = "sync/{ip}/{port}/{pin}"
     const val ROUTE_FILE_ACCESS = "file_access"
     const val ROUTE_BROWSER = "browser/{initialPath}"
+    const val ROUTE_BACKUP_MANAGER = "backup_manager/{ip}/{port}/{pin}"
 
     fun syncRoute(ip: String, port: String, pin: String) =
         "sync/${Uri.encode(ip)}/${Uri.encode(port)}/${Uri.encode(pin)}"
 
     fun browserRoute(initialPath: String) = "browser/${Uri.encode(initialPath)}"
+
+    fun backupManagerRoute(ip: String, port: String, pin: String) =
+        "backup_manager/${Uri.encode(ip)}/${Uri.encode(port)}/${Uri.encode(pin)}"
 }
 
 @Composable
@@ -85,6 +90,21 @@ fun AppNavGraph(prefs: AppPreferences, fileAccess: FileAccessService) {
                 fileAccess = fileAccess,
                 initialPath = initialPath,
             )
+        }
+
+        composable(
+            route = AppNavGraph.ROUTE_BACKUP_MANAGER,
+            arguments = listOf(
+                navArgument("ip") { type = NavType.StringType },
+                navArgument("port") { type = NavType.StringType },
+                navArgument("pin") { type = NavType.StringType },
+            ),
+        ) { backStack ->
+            val ip = backStack.arguments?.getString("ip") ?: ""
+            val port = backStack.arguments?.getString("port") ?: "24742"
+            val pin = backStack.arguments?.getString("pin") ?: ""
+            val api = ApiClient("http://$ip:$port", pin)
+            BackupManagerScreen(api = api, fileAccess = fileAccess, prefs = prefs)
         }
     }
 }

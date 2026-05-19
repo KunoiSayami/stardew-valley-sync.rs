@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
@@ -58,7 +59,6 @@ import com.stardewsync.data.api.ApiClient
 import com.stardewsync.data.prefs.AppPreferences
 import com.stardewsync.service.FileAccessService
 import com.stardewsync.ui.navigation.AppNavGraph
-import com.stardewsync.ui.sync.SyncDirection
 import java.text.DateFormat
 import java.util.Date
 
@@ -125,6 +125,13 @@ fun SyncScreen(
                     }
                     IconButton(onClick = { showPathDialog = true }) {
                         Icon(Icons.Default.Folder, contentDescription = "Saves path")
+                    }
+                    IconButton(onClick = {
+                        navController.navigate(
+                            AppNavGraph.backupManagerRoute(ip, port, prefs.serverPin ?: "")
+                        )
+                    }) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "Manage backups")
                     }
                     IconButton(onClick = { vm.refresh() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
