@@ -122,6 +122,18 @@ class ApiClient(private val baseUrl: String, private val pin: String) {
             if (!response.isSuccessful) throw IOException("Delete backup failed: ${response.code}")
         }
     }
+
+    suspend fun purgeServerBackups(days: Int): Int = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("$baseUrl/api/v1/backups?days=$days")
+            .withPin()
+            .delete()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Purge backups failed: ${response.code}")
+            JSONObject(response.body.string()).getInt("deleted")
+        }
+    }
 }
 
 data class BackupInfo(val name: String, val slotId: String, val timestampMs: Long)

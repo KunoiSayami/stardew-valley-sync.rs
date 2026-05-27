@@ -15,12 +15,15 @@ import kotlinx.coroutines.launch
 data class BackupEntry(val name: String, val slotId: String, val timestampMs: Long)
 
 data class BackupUiState(
+    val selectedTab: Int = 0,
     val localBackups: List<BackupEntry> = emptyList(),
     val serverBackups: List<BackupEntry> = emptyList(),
     val isLoading: Boolean = false,
     val statusMessage: String? = null,
     val pendingDeleteLocal: BackupEntry? = null,
     val pendingDeleteServer: BackupEntry? = null,
+    val showPurgeLocalDialog: Boolean = false,
+    val showPurgeServerDialog: Boolean = false,
 )
 
 class BackupManagerViewModel(
@@ -35,6 +38,8 @@ class BackupManagerViewModel(
     init {
         refresh()
     }
+
+    fun selectTab(index: Int) = _uiState.update { it.copy(selectedTab = index) }
 
     fun refresh() {
         viewModelScope.launch {
@@ -86,6 +91,44 @@ class BackupManagerViewModel(
                 _uiState.update { it.copy(statusMessage = "Deleted ${entry.name}") }
             } catch (e: Exception) {
                 _uiState.update { it.copy(statusMessage = "Delete failed: ${e.message}") }
+            }
+            refresh()
+        }
+    }
+
+    fun showPurgeLocalDialog() = _uiState.update { it.copy(showPurgeLocalDialog = true) }
+    fun showPurgeServerDialog() = _uiState.update { it.copy(showPurgeServerDialog = true) }
+    fun dismissPurgeDialog() = _uiState.update { it.copy(showPurgeLocalDialog = false, showPurgeServerDialog = false) }
+
+    fun purgeLocalBackups(days: Int) {
+        _uiState.update { it.copy(showPurgeLocalDialog = false) }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            try {
+                val cutoffMs = System.currentTimeMillis() - days.toLong() * 86_400_000L
+                val toDelete = _uiState.value.localBackups.filter { it.timestampMs < cutoffMs }
+                var count = 0
+                for (entry in toDelete) {
+                    runCatching { fileAccess.deleteBackup(entry.name, prefs.savesPath) }
+                        .onSuccess { count++ }
+                }
+                _uiState.update { it.copy(statusMessage = "Deleted $count backup(s) older than $days day(s)") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(statusMessage = "Purge failed: ${e.message}") }
+            }
+            refresh()
+        }
+    }
+
+    fun purgeServerBackups(days: Int) {
+        _uiState.update { it.copy(showPurgeServerDialog = false) }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            try {
+                val count = api.purgeServerBackups(days)
+                _uiState.update { it.copy(statusMessage = "Deleted $count backup(s) older than $days day(s)") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(statusMessage = "Purge failed: ${e.message}") }
             }
             refresh()
         }
