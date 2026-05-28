@@ -115,7 +115,7 @@ fun SyncScreen(
             TopAppBar(
                 title = { Text("$ip:$port") },
                 actions = {
-                    if (!state.hasPermission) {
+                    if (!state.isLoading && !state.hasPermission) {
                         IconButton(onClick = { navController.navigate(AppNavGraph.ROUTE_FILE_ACCESS) }) {
                             Icon(Icons.Default.Lock, contentDescription = "File access")
                         }
@@ -155,7 +155,7 @@ fun SyncScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (!state.hasPermission) {
+            if (!state.isLoading && !state.hasPermission) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -198,6 +198,24 @@ fun SyncScreen(
             val fmt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
 
             LazyColumn(modifier = Modifier.fillMaxSize()) {
+                state.serverError?.let { err ->
+                    item {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        ) {
+                            Text(
+                                "Unable to connect to server",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                err.removePrefix("Unable to connect to server: "),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
                 items(state.serverSlots) { slot ->
                     val localMs = state.localSlots[slot.slotId]
                     val slotErr = state.slotErrors[slot.slotId] ?: emptySet()

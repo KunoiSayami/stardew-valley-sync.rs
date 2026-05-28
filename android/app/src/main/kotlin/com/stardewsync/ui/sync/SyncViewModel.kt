@@ -30,6 +30,7 @@ data class SyncUiState(
     val savesPath: String? = null,
     val dirMissing: Boolean = false,
     val isLoading: Boolean = false,
+    val serverError: String? = null,
     val statusMessage: String? = null,
     val pendingConflict: ConflictInfo? = null,
     val showShizukuSuggestion: Boolean = false,
@@ -52,10 +53,10 @@ class SyncViewModel(
     fun refresh() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
+            val hasPerm = fileAccess.hasPermission()
+            val savesPath = prefs.savesPath
+            val dirExists = fileAccess.savesDirExists(savesPath)
             try {
-                val hasPerm = fileAccess.hasPermission()
-                val savesPath = prefs.savesPath
-                val dirExists = fileAccess.savesDirExists(savesPath)
                 val serverSlots = api.listSaves()
                 val localMap: Map<String, Long> = if (hasPerm && dirExists) {
                     fileAccess.listSaves(savesPath).associate {
@@ -77,13 +78,20 @@ class SyncViewModel(
                         savesPath = savesPath,
                         dirMissing = hasPerm && !dirExists,
                         isLoading = false,
+                        serverError = null,
                         showShizukuSuggestion = suggestShizuku,
                         slotErrors = emptyMap(),
                     )
                 }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, statusMessage = "Refresh failed: ${e.message}")
+                    it.copy(
+                        isLoading = false,
+                        hasPermission = hasPerm,
+                        savesPath = savesPath,
+                        dirMissing = hasPerm && !dirExists,
+                        serverError = "Unable to connect to server: ${e.message}",
+                    )
                 }
             }
         }
