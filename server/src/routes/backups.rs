@@ -27,9 +27,10 @@ pub async fn purge_handler(
     Query(params): Query<PurgeParams>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let saves_dir = state.saves_dir.as_ref().clone();
-    let count = tokio::task::spawn_blocking(move || saves::purge_old_backups(&saves_dir, params.days))
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;
+    let count =
+        tokio::task::spawn_blocking(move || saves::purge_old_backups(&saves_dir, params.days))
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))??;
     Ok(Json(serde_json::json!({ "deleted": count })))
 }
 

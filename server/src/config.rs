@@ -77,9 +77,18 @@ impl Config {
         let (file, config_path) = match &cli.config {
             Some(path) => (FileConfig::load(path)?, Some(path.clone())),
             None => {
-                // 1. config.toml next to the binary / in the working directory
-                // 2. platform config dir (~/.config/stardew-sync-server/config.toml)
-                let candidates = [PathBuf::from("config.toml"), default_config_path()];
+                // 1. config.toml in the working directory
+                // 2. config.toml next to the executable (cwd is unrelated when
+                //    launched from the registry autostart entry)
+                // 3. platform config dir (~/.config/stardew-sync-server/config.toml)
+                let candidates: Vec<PathBuf> = [
+                    Some(PathBuf::from("config.toml")),
+                    exe_dir_config_path(),
+                    Some(default_config_path()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 match candidates.iter().find(|p| p.exists()) {
                     Some(path) => (
                         FileConfig::load(path).unwrap_or_default(),
@@ -128,6 +137,12 @@ pub fn detect_saves_dir() -> PathBuf {
     base.unwrap_or_else(|| PathBuf::from("."))
         .join("StardewValley")
         .join("Saves")
+}
+
+/// `config.toml` next to the running executable.
+pub fn exe_dir_config_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("config.toml"))
 }
 
 pub fn default_config_path() -> PathBuf {
